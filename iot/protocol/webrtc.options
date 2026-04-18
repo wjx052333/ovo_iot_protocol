@@ -1,0 +1,14 @@
+# nanopb options for webrtc.proto
+# All variable-length string/repeated fields use FT_POINTER (requires PB_ENABLE_MALLOC=1)
+
+webrtc.IceCandidate.candidate        type:FT_POINTER
+webrtc.IceCandidate.sdp_mid          type:FT_POINTER
+
+webrtc.IceServer.urls                type:FT_POINTER
+webrtc.IceServer.username            type:FT_POINTER
+webrtc.IceServer.credential          type:FT_POINTER
+
+webrtc.IceConfig.ice_servers         type:FT_POINTER
+
+webrtc.WebrtcSignal.app_client_id    type:FT_POINTER
+webrtc.WebrtcSignal.sdp              type:FT_POINTER

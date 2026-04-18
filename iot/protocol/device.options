@@ -1,0 +1,15 @@
+# nanopb options for device.proto
+# All variable-length string/repeated fields use FT_POINTER (requires PB_ENABLE_MALLOC=1)
+
+device.Heartbeat.device_id           type:FT_POINTER
+
+device.StatusReport.device_id        type:FT_POINTER
+device.StatusReport.room_id          type:FT_POINTER
+
+device.JoinRoom.room_id              type:FT_POINTER
+device.JoinRoom.livekit_url          type:FT_POINTER
+device.JoinRoom.token                type:FT_POINTER
+
+device.LeaveRoom.room_id             type:FT_POINTER
+
+device.UploadLogs.upload_url         type:FT_POINTER

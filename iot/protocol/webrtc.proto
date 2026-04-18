@@ -1,0 +1,52 @@
+syntax = "proto3";
+package webrtc;
+
+// 信令类型枚举
+enum SignalType {
+  SIGNAL_TYPE_UNSPECIFIED = 0; // 占位符，proto3 规范要求
+  SIGNAL_TYPE_OFFER       = 1; // 发起呼叫
+  SIGNAL_TYPE_ANSWER      = 2; // 接听响应
+  SIGNAL_TYPE_CANDIDATE   = 3; // 交换网络候选者 (打洞)
+  SIGNAL_TYPE_BYE         = 4; // 挂断/结束通话
+}
+
+// ICE 候选者信息
+message IceCandidate {
+  string candidate        = 1; // 例如: "candidate:842163049 1 udp 1677729535 192.168.1.2 59613 typ srflx..."
+  string sdp_mid          = 2; // 例如: "video" 或 "audio"
+  int32  sdp_m_line_index = 3; // 例如: 0
+}
+
+// TURN/STUN 服务器配置
+message IceServer {
+  repeated string urls       = 1; // e.g. ["turn:host:3479", "turns:host:5349?transport=tcp"]
+  string          username   = 2; // TURN 临时用户名
+  string          credential = 3; // TURN 临时密码
+}
+
+// ICE 服务器列表，随 Offer 下发给设备。凭证每次呼叫前实时生成，不应缓存复用
+message IceConfig {
+  repeated IceServer ice_servers = 1;
+  int32              ttl_seconds = 2; // 凭证有效期（秒），建议 300，仅需覆盖 ICE 协商阶段
+}
+
+// WebRTC 核心信令消息 (对应 Topic: bird_mini/{device_id}/down/webrtc 和 up/webrtc/{app_client_id})
+message WebrtcSignal {
+  // App 端生成的唯一标识，设备回复信令时必须带上，用于精确路由
+  string app_client_id = 1;
+
+  // 信令类型
+  SignalType type = 2;
+
+  // 具体的信令内容：使用 oneof 因为 SDP 和 Candidate 不会同时存在
+  oneof payload {
+    // 当 type 为 OFFER 或 ANSWER 时，此处携带 SDP 字符串
+    string sdp = 3;
+
+    // 当 type 为 CANDIDATE 时，此处携带 ICE 信息
+    IceCandidate candidate = 4;
+  }
+
+  // 仅 OFFER 时携带，设备用此配置 PeerConnection 的 ICE servers
+  IceConfig ice_config = 5;
+}

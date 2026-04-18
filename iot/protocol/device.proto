@@ -1,0 +1,61 @@
+syntax = "proto3";
+package device;
+
+// 上行：心跳
+message Heartbeat {
+  string device_id = 1;
+  int64  timestamp = 2;
+}
+
+// 上行：状态上报
+message StatusReport {
+  string device_id  = 1;
+  bool   streaming  = 2;
+  string room_id    = 3;
+  int32  signal_dbm = 4;
+}
+
+message UploadLogs {
+  string upload_url = 1;  // URL where device should upload logs
+}
+
+// 下行：指令
+message Command {
+  oneof payload {
+    JoinRoom  join_room  = 1;
+    LeaveRoom leave_room = 2;
+    UploadLogs upload_logs = 3;
+  }
+}
+
+message JoinRoom {
+  string room_id     = 1;
+  string livekit_url = 2;
+  string token       = 3;
+}
+
+message LeaveRoom {
+  string room_id = 1;
+}
+
+enum PtzAction {
+  PTZ_ACTION_UNSPECIFIED = 0;
+  PTZ_ACTION_MOVE = 1;  // 开始移动
+  PTZ_ACTION_STOP = 2;  // 停止移动
+}
+
+enum PtzDirection {
+  PTZ_DIR_UNSPECIFIED = 0;
+  PTZ_DIR_UP = 1;
+  PTZ_DIR_DOWN = 2;
+  PTZ_DIR_LEFT = 3;
+  PTZ_DIR_RIGHT = 4;
+  PTZ_DIR_UP_LEFT = 5;
+  // ... 其他方向
+}
+
+message PtzControl {
+  PtzAction action = 1;
+  PtzDirection direction = 2; // 当 action 为 MOVE 时有效
+  int32 speed = 3;            // 移动速度，例如 1-10
+}
