@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Bird Mini P2P Debug</title>
+<style>
+  body { font-family: monospace; max-width: 960px; margin: 20px auto; padding: 0 12px; }
+  #log { background:#111; color:#0f0; padding:10px; height:260px; overflow-y:auto; font-size:12px; }
+  button { margin:4px; padding:6px 12px; cursor:pointer; }
+  video { width:100%; max-width:640px; background:#000; display:block; margin:10px 0; }
+  .video-row { display:flex; gap:12px; flex-wrap:wrap; }
+  .video-row .video-box { flex:1; min-width:280px; }
+  .video-box .label { font-size:11px; color:#888; margin-bottom:2px; }
+  .device-btn { background:#1a6; color:#fff; border:none; border-radius:3px; }
+  .hangup-btn { background:#c33; color:#fff; border:none; border-radius:3px; }
+  .cam-btn { background:#26a; color:#fff; border:none; border-radius:3px; }
+  #auth-section input { margin:4px; padding:5px 8px; width:160px; }
+  #auth-section { margin-bottom:12px; }
+  #user-info { margin-left:8px; color:#555; }
+  #status-bar { font-size:12px; color:#888; margin:4px 0; }
+</style>
+</head>
+<body>
+<h2>Bird Mini P2P Debug Client</h2>
+
+<!-- Cert reminder (always shown) -->
+<div style="background:#7d5a00;color:#ffe;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-family:sans-serif;font-size:0.88rem;line-height:1.6">
+  <strong>首次使用：</strong>请先在浏览器中分别打开以下链接，在安全警告页选择「继续访问（不安全）」，然后回来操作：<br>
+  <a id="cert-link-backend" href="#" target="_blank" style="color:#ffe;font-weight:bold">后端 (8080)</a>
+  &nbsp;&nbsp;
+  <a id="cert-link-emqx" href="#" target="_blank" style="color:#ffe;font-weight:bold">EMQX (8084)</a>
+</div>
+
+<div id="auth-section">
+  <input id="inp-user" placeholder="用户名" value="testuser1" />
+  <input id="inp-pass" placeholder="密码" value="Test1234!" type="password"
+         onkeydown="if(event.key==='Enter')login()" />
+  <button onclick="login()">登录</button>
+  <button onclick="doRegister()">注册</button>
+  <button id="btn-logout" style="display:none" onclick="logout()">退出</button>
+  <span id="user-info"></span>
+</div>
+
+<div id="device-section" style="display:none">
+  <div id="status-bar"></div>
+  <div style="margin:8px 0">
+    <button class="cam-btn" id="btn-cam" onclick="toggleCamera()">打开摄像头</button>
+    <button class="cam-btn" id="btn-mic" onclick="toggleMic()">打开麦克风</button>
+  </div>
+  <h3>Bound Devices <button onclick="loadDevices()" style="font-size:11px;padding:2px 8px">刷新</button></h3>
+  <div id="device-list"></div>
+  <div id="call-controls" style="display:none;margin:8px 0">
+    <button class="hangup-btn" onclick="hangup()">挂断</button>
+    <span id="call-status" style="margin-left:8px;font-size:12px"></span>
+  </div>
+  <div class="video-row">
+    <div class="video-box">
+      <div class="label">本地</div>
+      <video id="local-video" autoplay muted playsinline style="max-width:none"></video>
+    </div>
+    <div class="video-box">
+      <div class="label">远端 (Device)</div>
+      <video id="remote-video" autoplay playsinline controls style="max-width:none"></video>
+    </div>
+  </div>
+</div>
+
+<h3>Signal Log <button onclick="clearLog()" style="font-size:11px;padding:2px 8px">清空</button></h3>
+<div id="log"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/protobufjs@7/dist/protobuf.min.js"></script>
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const _host       = window.location.hostname;
+const BACKEND_URL = 'https://' + _host + ':8080';
+// Use wss:// (TLS) — plain ws:// is blocked when page loads over HTTPS
+const EMQX_WS_URL = 'wss://'  + _host + ':8084/mqtt';
+const PROTO_URL   = '/protocol/ovo_iot_protocol/iot/protocol/webrtc.proto';
+
+document.getElementById('cert-link-backend').href = BACKEND_URL;
+document.getElementById('cert-link-emqx').href    = 'https://' + _host + ':8084';
+
+let accessToken     = null;
+let userSub         = null;
+let mqttClient      = null;
+let pc              = null;
+let WebrtcSignal    = null;
+let SignalType      = null;
+let currentDeviceId = null;
+let localStream     = null;
+const appClientId   = 'app_' + Math.random().toString(36).substr(2, 12);
+
+// ── Logging ───────────────────────────────────────────────────────────────────
+function log(msg) {
+  const el = document.getElementById('log');
+  el.innerHTML += new Date().toISOString().substr(11,12) + ' ' + msg + '<br>';
+  el.scrollTop = el.scrollHeight;
+  console.log(msg);
+}
+function clearLog() { document.getElementById('log').innerHTML = ''; }
+function setStatus(msg) { document.getElementById('status-bar').textContent = msg; }
+function setCallStatus(msg) { document.getElementById('call-status').textContent = msg; }
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+async function login() {
+  const username = document.getElementById('inp-user').value.trim();
+  const password = document.getElementById('inp-pass').value;
+  if (!username || !password) { log('请输入用户名和密码'); return; }
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/login`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password})
+    });
+    const data = await res.json();
+    if (!data.access_token) { log('登录失败: ' + (data.error || JSON.stringify(data))); return; }
+    sessionStorage.setItem('access_token', data.access_token);
+    initWithToken(data.access_token);
+  } catch(e) { log('登录请求失败: ' + e); }
+}
+
+async function doRegister() {
+  const username = document.getElementById('inp-user').value.trim();
+  const password = document.getElementById('inp-pass').value;
+  if (!username || !password) { log('请输入用户名和密码'); return; }
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/register`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password})
+    });
+    const data = await res.json();
+    if (!data.access_token) { log('注册失败: ' + (data.error || JSON.stringify(data))); return; }
+    sessionStorage.setItem('access_token', data.access_token);
+    initWithToken(data.access_token);
+  } catch(e) { log('注册请求失败: ' + e); }
+}
+
+function initWithToken(token) {
+  accessToken = token;
+  const parts = token.split('.');
+  const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+  userSub = payload.sub;
+  document.getElementById('user-info').textContent = '已登录: ' + userSub;
+  document.getElementById('btn-logout').style.display = '';
+  document.getElementById('auth-section').querySelector('button').disabled = true;
+  document.getElementById('device-section').style.display = 'block';
+  log('登录成功 sub=' + userSub + '  appClientId=' + appClientId);
+  loadDevices();
+}
+
+function logout() {
+  hangup();
+  sessionStorage.removeItem('access_token');
+  accessToken = null; userSub = null;
+  document.getElementById('user-info').textContent = '';
+  document.getElementById('btn-logout').style.display = 'none';
+  document.getElementById('device-section').style.display = 'none';
+  document.getElementById('auth-section').querySelector('button').disabled = false;
+  log('已退出登录');
+}
+
+// ── Load devices ──────────────────────────────────────────────────────────────
+async function loadDevices() {
+  setStatus('加载设备中...');
+  const el = document.getElementById('device-list');
+  el.innerHTML = '';
+  try {
+    // 1. 优先显示当前用户绑定的设备
+    const res = await fetch(`${BACKEND_URL}/api/my/devices`, {
+      headers: {'Authorization': 'Bearer ' + accessToken}
+    });
+    const devices = await res.json();
+    if (Array.isArray(devices) && devices.length > 0) {
+      log('绑定设备: ' + devices.map(d => d.device_id).join(', '));
+      for (const d of devices) addDeviceButton(el, d.device_id, d.display_name);
+      setStatus('');
+      return;
+    }
+    // 2. 没有绑定设备时显示所有已注册设备（联调用）
+    log('无绑定设备，加载全局设备列表（联调模式）');
+    const resAll = await fetch(`${BACKEND_URL}/api/devices`, {
+      headers: {'Authorization': 'Bearer ' + accessToken}
+    });
+    const allDevices = await resAll.json();
+    if (!Array.isArray(allDevices) || allDevices.length === 0) {
+      el.textContent = '(无设备，请先在数据库注册设备)';
+      setStatus('');
+      return;
+    }
+    const note = document.createElement('div');
+    note.style.cssText = 'color:#a80;font-size:12px;margin-bottom:4px';
+    note.textContent = '⚠ 未绑定设备，以下为全局设备列表（联调用）';
+    el.appendChild(note);
+    for (const d of allDevices) addDeviceButton(el, d.device_id, d.name, !d.online);
+  } catch(e) { log('加载设备失败: ' + e); }
+  setStatus('');
+}
+
+function addDeviceButton(container, deviceId, label, offline) {
+  const btn = document.createElement('button');
+  btn.className = 'device-btn';
+  btn.style.opacity = offline ? '0.5' : '1';
+  btn.textContent = (offline ? '○' : '●') + ' ' + label + ' (' + deviceId + ')';
+  btn.onclick = () => startP2P(deviceId);
+  container.appendChild(btn);
+}
+
+// ── Load proto ────────────────────────────────────────────────────────────────
+async function loadProto() {
+  if (WebrtcSignal) return;
+  const root = await protobuf.load(PROTO_URL);
+  WebrtcSignal = root.lookupType('webrtc.WebrtcSignal');
+  SignalType   = root.lookupEnum('webrtc.SignalType').values;
+  log('Proto loaded: ' + Object.keys(SignalType).join(', '));
+}
+
+// ── P2P flow ──────────────────────────────────────────────────────────────────
+async function startP2P(deviceId) {
+  if (pc) { hangup(); await new Promise(r => setTimeout(r, 300)); }
+
+  await loadProto();
+  currentDeviceId = deviceId;
+  log('开始 P2P: ' + deviceId);
+  document.getElementById('call-controls').style.display = '';
+  setCallStatus('连接中...');
+
+  // 1. 获取 TURN 凭证
+  let iceConfig;
+  try {
+    const iceRes = await fetch(`${BACKEND_URL}/api/ice_config`, {
+      headers: {'Authorization': 'Bearer ' + accessToken}
+    });
+    iceConfig = await iceRes.json();
+    log('ICE config: ttl=' + iceConfig.ttl_seconds + 's, servers=' + iceConfig.ice_servers.length);
+  } catch(e) { log('获取 ICE config 失败: ' + e); setCallStatus('失败'); return; }
+
+  // 2. 创建 PeerConnection
+  pc = new RTCPeerConnection({iceServers: iceConfig.ice_servers});
+  pc.ontrack = e => {
+    log('收到远端流: ' + e.track.kind + ' streams=' + e.streams.length
+        + ' id=' + e.track.id + ' readyState=' + e.track.readyState
+        + ' muted=' + e.track.muted + ' enabled=' + e.track.enabled);
+    e.track.onmute     = () => log('track muted: '   + e.track.kind);
+    e.track.onunmute   = () => log('track unmuted: ' + e.track.kind);
+    e.track.onended    = () => log('track ended: '   + e.track.kind);
+    const vid = document.getElementById('remote-video');
+    const stream = e.streams[0];
+    if (stream) {
+      if (vid.srcObject !== stream) vid.srcObject = stream;
+    } else {
+      if (!vid.srcObject) vid.srcObject = new MediaStream();
+      vid.srcObject.addTrack(e.track);
+    }
+    // Play only on video track to avoid interrupting load with double play()
+    if (e.track.kind === 'video') {
+      vid.play().catch(err => log('autoplay blocked: ' + err + ' — click video to play'));
+    }
+    setCallStatus('已连接');
+  };
+  pc.onicecandidate = e => {
+    if (!e.candidate) return;
+    log('ICE candidate → 设备: ' + e.candidate.candidate.substr(0,60));
+    sendSignal({
+      appClientId: appClientId,
+      type: SignalType.SIGNAL_TYPE_CANDIDATE,
+      candidate: {
+        candidate:     e.candidate.candidate,
+        sdpMid:        e.candidate.sdpMid,
+        sdpMLineIndex: e.candidate.sdpMLineIndex
+      }
+    }, `bird_mini/${deviceId}/down/webrtc`);
+  };
+  pc.oniceconnectionstatechange = () => {
+    log('ICE 状态: ' + pc.iceConnectionState);
+    setCallStatus(pc.iceConnectionState);
+    if (pc.iceConnectionState === 'failed') { log('ICE 失败，尝试重启'); pc.restartIce(); }
+  };
+  pc.onconnectionstatechange = () => {
+    log('连接状态: ' + pc.connectionState);
+    if (pc.connectionState === 'connected') {
+      // 每 5 秒打印一次 RTP 统计，直到视频播放或连接断开
+      const statsInterval = setInterval(async () => {
+        if (!pc || pc.connectionState !== 'connected') { clearInterval(statsInterval); return; }
+        const stats = await pc.getStats();
+        let hasInbound = false;
+        stats.forEach(s => {
+          if (s.type === 'inbound-rtp') {
+            hasInbound = true;
+            log(`[stats] inbound-rtp kind=${s.kind} pkts=${s.packetsReceived} bytes=${s.bytesReceived} framesDecoded=${s.framesDecoded||0} framesReceived=${s.framesReceived||0} framesDropped=${s.framesDropped||0} jitter=${s.jitter}`);
+          }
+          if (s.type === 'outbound-rtp') {
+            log(`[stats] outbound-rtp kind=${s.kind} pkts=${s.packetsSent} bytes=${s.bytesSent}`);
+          }
+          if (s.type === 'candidate-pair' && s.state === 'succeeded') {
+            log(`[stats] selected-pair localType=${s.localCandidateId} bytesSent=${s.bytesSent} bytesRecv=${s.bytesReceived} rtt=${s.currentRoundTripTime}`);
+          }
+        });
+        if (!hasInbound) log('[stats] inbound-rtp: 无（尚未收到任何 RTP 包）');
+        const vid = document.getElementById('remote-video');
+        log(`[stats] video readyState=${vid.readyState} networkState=${vid.networkState} paused=${vid.paused} tracks=${vid.srcObject?.getTracks().map(t=>t.kind+':'+t.readyState+':muted='+t.muted).join(',')}`);
+      }, 5000);
+    }
+  };
+
+  // 3. 连接 MQTT
+  try {
+    await connectMqtt(deviceId);
+  } catch(e) { log('MQTT 连接失败: ' + e); setCallStatus('MQTT 失败'); return; }
+
+  // 4. 把本地流 track 加到 PC（若已打开）
+  if (localStream) {
+    localStream.getTracks().forEach(t => {
+      pc.addTrack(t, localStream);
+      log('本地 track 已加入 PC: ' + t.kind);
+    });
+  }
+
+  // 5. 创建并发送 Offer
+  const offer = await pc.createOffer({offerToReceiveVideo: true, offerToReceiveAudio: true});
+  await pc.setLocalDescription(offer);
+  log('发送 OFFER: ' + offer.sdp.split('\n').filter(l => l.startsWith('m=')).join(' '));
+  sendSignal({
+    appClientId: appClientId,
+    type: SignalType.SIGNAL_TYPE_OFFER,
+    sdp: offer.sdp,
+    iceConfig: {
+      iceServers: iceConfig.ice_servers.map(s => ({
+        urls: s.urls, username: s.username, credential: s.credential
+      })),
+      ttlSeconds: iceConfig.ttl_seconds
+    }
+  }, `bird_mini/${deviceId}/down/webrtc`);
+}
+
+function connectMqtt(deviceId) {
+  return new Promise((resolve, reject) => {
+    log('MQTT 连接 ' + EMQX_WS_URL + ' clientId=' + appClientId);
+    mqttClient = mqtt.connect(EMQX_WS_URL, {
+      clientId: appClientId, username: userSub, password: accessToken,
+      clean: true, reconnectPeriod: 0,
+      connectTimeout: 10000,
+      rejectUnauthorized: false  // Allow self-signed certificates in dev environment
+    });
+    const timer = setTimeout(() => {
+      log('MQTT connect timeout after 10s');
+      reject(new Error('MQTT connect timeout'));
+    }, 10000);
+    mqttClient.on('connect', () => {
+      clearTimeout(timer);
+      log('MQTT 已连接');
+      const subTopic = `bird_mini/${deviceId}/up/webrtc/${appClientId}`;
+      mqttClient.subscribe(subTopic, err => {
+        if (err) { log('订阅失败: ' + err); reject(err); }
+        else { log('已订阅: ' + subTopic); resolve(); }
+      });
+    });
+    mqttClient.on('error', e => {
+      clearTimeout(timer);
+      log('MQTT 错误: ' + JSON.stringify(e, null, 2));
+      reject(e);
+    });
+    mqttClient.on('offline', () => log('MQTT offline'));
+    mqttClient.on('disconnect', () => log('MQTT disconnect'));
+    mqttClient.on('message', (topic, payload) => handleSignal(topic, payload));
+  });
+}
+
+function sendSignal(msg, topic) {
+  if (!mqttClient || !mqttClient.connected) { log('MQTT 未连接，丢弃信令'); return; }
+  const err = WebrtcSignal.verify(msg);
+  if (err) { log('Proto 验证失败: ' + err); return; }
+  const encoded = WebrtcSignal.encode(WebrtcSignal.create(msg)).finish();
+  log('→ [' + topic + '] type=' + msg.type);
+  mqttClient.publish(topic, encoded);
+}
+
+async function handleSignal(topic, payload) {
+  const msg = WebrtcSignal.decode(payload);
+  log('← [' + topic + '] type=' + msg.type);
+  if (msg.type === SignalType.SIGNAL_TYPE_ANSWER) {
+    log('收到 ANSWER');
+    log('ANSWER SDP m-lines: ' + msg.sdp.split('\n').filter(l => l.startsWith('m=')).join(' | '));
+    log('ANSWER SDP setup: ' + msg.sdp.split('\n').filter(l => l.includes('setup')).join(' | '));
+    log('ANSWER SDP length: ' + msg.sdp.length);
+    log('ANSWER SDP full:\n' + msg.sdp.replace(/\r/g,''));
+    await pc.setRemoteDescription({type: 'answer', sdp: msg.sdp});
+  } else if (msg.type === SignalType.SIGNAL_TYPE_CANDIDATE && msg.candidate) {
+    await pc.addIceCandidate({
+      candidate:     msg.candidate.candidate,
+      sdpMid:        msg.candidate.sdpMid,
+      sdpMLineIndex: msg.candidate.sdpMLineIndex
+    });
+    log('添加远端 ICE candidate');
+  } else if (msg.type === SignalType.SIGNAL_TYPE_BYE) {
+    log('收到 BYE');
+    hangup();
+  }
+}
+
+function hangup() {
+  if (pc) { pc.close(); pc = null; }
+  if (mqttClient) { mqttClient.end(true); mqttClient = null; }
+  document.getElementById('remote-video').srcObject = null;
+  document.getElementById('call-controls').style.display = 'none';
+  setCallStatus('');
+  log('已挂断');
+  currentDeviceId = null;
+}
+
+// ── Local camera / mic ────────────────────────────────────────────────────────
+async function toggleCamera() {
+  const btn = document.getElementById('btn-cam');
+  if (localStream && localStream.getVideoTracks().length > 0) {
+    localStream.getVideoTracks().forEach(t => t.stop());
+    if (localStream.getAudioTracks().length === 0) {
+      localStream = null;
+      document.getElementById('local-video').srcObject = null;
+    }
+    btn.textContent = '打开摄像头';
+    log('摄像头已关闭');
+  } else {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      log('getUserMedia 不可用（需要 HTTPS 或 localhost）'); return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({video: true});
+      if (!localStream) localStream = new MediaStream();
+      stream.getVideoTracks().forEach(t => localStream.addTrack(t));
+      document.getElementById('local-video').srcObject = localStream;
+      // 如果 PC 已建立，动态加入
+      if (pc) stream.getVideoTracks().forEach(t => pc.addTrack(t, localStream));
+      btn.textContent = '关闭摄像头';
+      log('摄像头已打开');
+    } catch(e) { log('打开摄像头失败: ' + e); }
+  }
+}
+
+async function toggleMic() {
+  const btn = document.getElementById('btn-mic');
+  if (localStream && localStream.getAudioTracks().length > 0) {
+    localStream.getAudioTracks().forEach(t => t.stop());
+    if (localStream.getVideoTracks().length === 0) {
+      localStream = null;
+    }
+    btn.textContent = '打开麦克风';
+    log('麦克风已关闭');
+  } else {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      log('getUserMedia 不可用（需要 HTTPS 或 localhost）'); return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      if (!localStream) localStream = new MediaStream();
+      stream.getAudioTracks().forEach(t => localStream.addTrack(t));
+      // 如果 PC 已建立，动态加入
+      if (pc) stream.getAudioTracks().forEach(t => pc.addTrack(t, localStream));
+      btn.textContent = '关闭麦克风';
+      log('麦克风已打开');
+    } catch(e) { log('打开麦克风失败: ' + e); }
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async () => {
+  const vid = document.getElementById('remote-video');
+  vid.onloadedmetadata = () => log('video: loadedmetadata ' + vid.videoWidth + 'x' + vid.videoHeight);
+  vid.onplaying      = () => log('video: playing ' + vid.videoWidth + 'x' + vid.videoHeight);
+  vid.onwaiting      = () => log('video: waiting');
+  vid.onstalled      = () => log('video: stalled');
+  vid.onerror        = () => log('video: error ' + vid.error?.message);
+  vid.oncanplay      = () => log('video: canplay readyState=' + vid.readyState);
+  vid.onresize       = () => log('video: resize ' + vid.videoWidth + 'x' + vid.videoHeight);
+  const stored = sessionStorage.getItem('access_token');
+  if (stored) {
+    try {
+      const parts = stored.split('.');
+      const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+      if (payload.exp && payload.exp > Date.now() / 1000) {
+        initWithToken(stored);
+        return;
+      }
+    } catch(_) {}
+    sessionStorage.removeItem('access_token');
+  }
+})();
+</script>
+</body>
+</html>
