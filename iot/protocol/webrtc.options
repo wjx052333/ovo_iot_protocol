@@ -1,11 +1,13 @@
 # nanopb field options for webrtc.proto
 # max_size constrains string fields to fixed-size char arrays; pb_decode returns
 # false with "string overflow" if input exceeds the limit.
+# type:FT_POINTER uses heap allocation (pb_release required); used for sdp which
+# can reach ~5 KB for offers — avoids stack-blowing fixed buffers.
 
 webrtc.WebrtcSignal.app_client_id   max_size:64
-webrtc.WebrtcSignal.sdp             max_size:4096
+webrtc.WebrtcSignal.sdp             type:FT_POINTER
 
-webrtc.IceCandidate.candidate       max_size:256
+webrtc.IceCandidate.candidate       max_size:512
 webrtc.IceCandidate.sdp_mid         max_size:16
 
 webrtc.IceServer.urls               max_size:128 max_count:4
