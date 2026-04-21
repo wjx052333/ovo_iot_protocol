@@ -1,14 +1,15 @@
-# nanopb options for webrtc.proto
-# All variable-length string/repeated fields use FT_POINTER (requires PB_ENABLE_MALLOC=1)
+# nanopb field options for webrtc.proto
+# max_size constrains string fields to fixed-size char arrays; pb_decode returns
+# false with "string overflow" if input exceeds the limit.
 
-webrtc.IceCandidate.candidate        type:FT_POINTER
-webrtc.IceCandidate.sdp_mid          type:FT_POINTER
+webrtc.WebrtcSignal.app_client_id   max_size:64
+webrtc.WebrtcSignal.sdp             max_size:4096
 
-webrtc.IceServer.urls                type:FT_POINTER
-webrtc.IceServer.username            type:FT_POINTER
-webrtc.IceServer.credential          type:FT_POINTER
+webrtc.IceCandidate.candidate       max_size:256
+webrtc.IceCandidate.sdp_mid         max_size:16
 
-webrtc.IceConfig.ice_servers         type:FT_POINTER
+webrtc.IceServer.urls               max_size:128 max_count:4
+webrtc.IceServer.username           max_size:64
+webrtc.IceServer.credential         max_size:64
 
-webrtc.WebrtcSignal.app_client_id    type:FT_POINTER
-webrtc.WebrtcSignal.sdp              type:FT_POINTER
+webrtc.IceConfig.ice_servers        max_count:8

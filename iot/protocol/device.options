@@ -1,15 +1,16 @@
-# nanopb options for device.proto
-# All variable-length string/repeated fields use FT_POINTER (requires PB_ENABLE_MALLOC=1)
+# nanopb field options for device.proto
+# max_size constrains string fields to fixed-size char arrays; pb_decode returns
+# false with "string overflow" if input exceeds the limit.
 
-device.Heartbeat.device_id           type:FT_POINTER
+device.Heartbeat.device_id          max_size:32
 
-device.StatusReport.device_id        type:FT_POINTER
-device.StatusReport.room_id          type:FT_POINTER
+device.StatusReport.device_id       max_size:32
+device.StatusReport.room_id         max_size:32
 
-device.JoinRoom.room_id              type:FT_POINTER
-device.JoinRoom.livekit_url          type:FT_POINTER
-device.JoinRoom.token                type:FT_POINTER
+device.JoinRoom.room_id             max_size:32
+device.JoinRoom.livekit_url         max_size:64
+device.JoinRoom.token               max_size:768
 
-device.LeaveRoom.room_id             type:FT_POINTER
+device.LeaveRoom.room_id            max_size:32
 
-device.UploadLogs.upload_url         type:FT_POINTER
+device.UploadLogs.upload_url        max_size:512
