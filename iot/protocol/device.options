@@ -14,3 +14,8 @@ device.JoinRoom.token               max_size:768
 device.LeaveRoom.room_id            max_size:32
 
 device.UploadLogs.upload_url        max_size:512
+
+device.CommandResponse.device_id    max_size:32
+device.JoinRoomResp.reason          max_size:64
+device.LeaveRoomResp.reason         max_size:64
+device.UploadLogsResp.reason        max_size:64

@@ -38,6 +38,36 @@ message LeaveRoom {
   string room_id = 1;
 }
 
+// 上行：指令结果
+enum CmdResult {
+  CMD_RESULT_OK   = 0;
+  CMD_RESULT_BUSY = 1;
+}
+
+message JoinRoomResp {
+  CmdResult result = 1;
+  string    reason = 2;
+}
+
+message LeaveRoomResp {
+  CmdResult result = 1;
+  string    reason = 2;
+}
+
+message UploadLogsResp {
+  CmdResult result = 1;
+  string    reason = 2;
+}
+
+message CommandResponse {
+  string device_id = 1;
+  oneof payload {
+    JoinRoomResp   join_room   = 2;
+    LeaveRoomResp  leave_room  = 3;
+    UploadLogsResp upload_logs = 4;
+  }
+}
+
 enum PtzAction {
   PTZ_ACTION_UNSPECIFIED = 0;
   PTZ_ACTION_MOVE = 1;  // 开始移动

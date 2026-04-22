@@ -8,6 +8,7 @@ enum SignalType {
   SIGNAL_TYPE_ANSWER      = 2; // 接听响应
   SIGNAL_TYPE_CANDIDATE   = 3; // 交换网络候选者 (打洞)
   SIGNAL_TYPE_BYE         = 4; // 挂断/结束通话
+  SIGNAL_TYPE_REJECT      = 5; // 拒绝呼叫（设备忙）
 }
 
 // ICE 候选者信息
