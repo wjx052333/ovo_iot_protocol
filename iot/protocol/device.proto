@@ -21,11 +21,18 @@ message UploadLogs {
 
 // 下行：指令
 message Command {
+  string role = 4;  // "backend", "app", or "agent"
   oneof payload {
     JoinRoom  join_room  = 1;
     LeaveRoom leave_room = 2;
     UploadLogs upload_logs = 3;
+    AgentCommand agent_cmd = 5;
   }
+}
+
+message AgentCommand {
+  string type   = 1;
+  string params = 2;  // JSON string
 }
 
 message JoinRoom {
@@ -59,12 +66,20 @@ message UploadLogsResp {
   string    reason = 2;
 }
 
+message AgentCmdResp {
+  CmdResult result = 1;
+  string    reason = 2;
+  string    data   = 3;
+}
+
 message CommandResponse {
   string device_id = 1;
+  string role      = 5;  // mirrors Command.role
   oneof payload {
     JoinRoomResp   join_room   = 2;
     LeaveRoomResp  leave_room  = 3;
     UploadLogsResp upload_logs = 4;
+    AgentCmdResp   agent_cmd   = 6;
   }
 }
 
