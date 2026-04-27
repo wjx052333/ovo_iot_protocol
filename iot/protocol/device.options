@@ -19,3 +19,9 @@ device.CommandResponse.device_id    max_size:32
 device.JoinRoomResp.reason          max_size:64
 device.LeaveRoomResp.reason         max_size:64
 device.UploadLogsResp.reason        max_size:64
+
+device.ChatResponse.room_id         max_size:32
+device.ChatResponse.livekit_url     max_size:64
+device.ChatResponse.token           max_size:768
+
+device.CronRequest.message          type:FT_POINTER

@@ -89,3 +89,45 @@ message PtzControl {
   PtzDirection direction = 2; // 当 action 为 MOVE 时有效
   int32 speed = 3;            // 移动速度，例如 1-10
 }
+
+enum ChatAction {
+  CHAT_ACTION_UNSPECIFIED = 0;
+  CHAT_ACTION_LIVEKIT = 1;  // 接入Livekit
+}
+message ChatRequest {
+  ChatAction action = 1; 
+}
+
+message CronRequest {
+  string message = 1;
+}
+
+message AgentRequest {
+  oneof payload {
+    ChatRequest chat = 2;
+    CronRequest cron = 3;
+  }
+}
+
+enum AgentRespCode {
+  AGENT_RESP_OK      = 0;
+  AGENT_RESP_BUSY    = 1;
+}
+
+message ChatResponse {
+  AgentRespCode result      = 1;
+  string        room_id     = 2;
+  string        livekit_url = 3;
+  string        token       = 4;
+}
+
+message CronResponse {
+  AgentRespCode result = 1;
+}
+
+message AgentResponse {
+  oneof payload {
+    ChatResponse chat = 2;
+    CronResponse cron = 3;
+  }
+}
