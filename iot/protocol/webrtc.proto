@@ -9,6 +9,11 @@ enum SignalType {
   SIGNAL_TYPE_CANDIDATE   = 3; // 交换网络候选者 (打洞)
   SIGNAL_TYPE_BYE         = 4; // 挂断/结束通话
   SIGNAL_TYPE_REJECT      = 5; // 拒绝呼叫（设备忙）
+  SIGNAL_TYPE_ERROR       = 6; // 出错
+  SIGNAL_TYPE_PLAY        = 7; //切换文件
+  SIGNAL_TYPE_PAUSE       = 8; //暂停推流
+  SIGNAL_TYPE_STOP        = 9; //停止推流，等价于BYE
+  SIGNAL_TYPE_SEEK        = 10;//跳转指定位置
 }
 
 // ICE 候选者信息
@@ -31,6 +36,29 @@ message IceConfig {
   int32              ttl_seconds = 2; // 凭证有效期（秒），建议 300，仅需覆盖 ICE 协商阶段
 }
 
+message WebRTCVideo {
+  int64  id           = 1;
+}
+
+message WebRTCOffer {
+  string sdp = 1;
+  // 仅 OFFER 时携带，设备用此配置 PeerConnection 的 ICE servers
+  IceConfig ice_config = 2;
+
+  WebRTCVideo video = 3;//如果带这个字段，说明不是预览，而是要点播指定文件
+}
+message WebRTCAnswer {
+  string sdp = 1;
+}
+message WebRTCError {
+  string msg = 1; //最多64字节
+  int32  error_code = 2;
+}
+message WebRTCPlayOrSeek {
+  WebRTCVideo video    = 1; //切换点播指定文件
+  float       position = 2; //跳转到指定位置（秒）
+}
+
 // WebRTC 核心信令消息 (对应 Topic: bird_mini/{device_id}/down/webrtc 和 up/webrtc/{app_client_id})
 message WebrtcSignal {
   // App 端生成的唯一标识，设备回复信令时必须带上，用于精确路由
@@ -42,12 +70,15 @@ message WebrtcSignal {
   // 具体的信令内容：使用 oneof 因为 SDP 和 Candidate 不会同时存在
   oneof payload {
     // 当 type 为 OFFER 或 ANSWER 时，此处携带 SDP 字符串
-    string sdp = 3;
+    WebRTCOffer  offer = 3;
+    WebRTCAnswer answer = 4;
 
     // 当 type 为 CANDIDATE 时，此处携带 ICE 信息
-    IceCandidate candidate = 4;
+    IceCandidate candidate = 5;
+
+    WebRTCError error_msg = 6; //SIGNAL_TYPE_ERROR带的消息
+
+    WebRTCPlayOrSeek playback = 7;
   }
 
-  // 仅 OFFER 时携带，设备用此配置 PeerConnection 的 ICE servers
-  IceConfig ice_config = 5;
 }

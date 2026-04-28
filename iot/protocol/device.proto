@@ -1,6 +1,22 @@
 syntax = "proto3";
 package device;
 
+message VideoMsg {
+  int64    id         = 1;
+  float32  length     = 2;
+  int64    start_time = 3;
+  int64    end_time   = 4;
+}
+enum EventType {
+  EVENT_TYPE_UND    = 0;
+  EVENT_TYPE_MOVING = 1;
+}
+message EventMsg {
+  EventType type   = 1;
+  int64  timestamp = 2;
+  VideoMsg  video  = 3;
+}
+
 // 上行：心跳
 message Heartbeat {
   string device_id = 1;
@@ -15,17 +31,9 @@ message StatusReport {
   int32  signal_dbm = 4;
 }
 
+// 下行：指令
 message UploadLogs {
   string upload_url = 1;  // URL where device should upload logs
-}
-
-// 下行：指令
-message Command {
-  oneof payload {
-    JoinRoom  join_room  = 1;
-    LeaveRoom leave_room = 2;
-    UploadLogs upload_logs = 3;
-  }
 }
 
 message JoinRoom {
@@ -36,6 +44,20 @@ message JoinRoom {
 
 message LeaveRoom {
   string room_id = 1;
+}
+
+message QueryEvent {
+  int64  start_time = 1;
+  int64  end_time   = 2;
+}
+
+message Command {
+  oneof payload {
+    JoinRoom  join_room  = 1;
+    LeaveRoom leave_room = 2;
+    UploadLogs upload_logs = 3;
+    QueryEvent query_event = 4;
+  }
 }
 
 // 上行：指令结果
@@ -59,12 +81,17 @@ message UploadLogsResp {
   string    reason = 2;
 }
 
+message QueryEventResp {
+  repeated EventMsg msg_list = 1;
+}
+
 message CommandResponse {
   string device_id = 1;
   oneof payload {
     JoinRoomResp   join_room   = 2;
     LeaveRoomResp  leave_room  = 3;
     UploadLogsResp upload_logs = 4;
+    QueryEventResp query_event = 5;
   }
 }
 
