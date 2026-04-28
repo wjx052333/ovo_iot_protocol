@@ -5,7 +5,11 @@
 # can reach ~5 KB for offers — avoids stack-blowing fixed buffers.
 
 webrtc.WebrtcSignal.app_client_id   max_size:64
-webrtc.WebrtcSignal.sdp             type:FT_POINTER
+
+webrtc.WebRTCOffer.sdp              type:FT_POINTER
+webrtc.WebRTCAnswer.sdp             type:FT_POINTER
+
+webrtc.WebRTCError.msg              max_size:64
 
 webrtc.IceCandidate.candidate       max_size:512
 webrtc.IceCandidate.sdp_mid         max_size:16
