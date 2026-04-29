@@ -79,11 +79,11 @@ Payload：device.Command{ query_event: QueryEvent{ start_time, end_time } }
 ### 上行响应
 
 ```
-Topic：bird_mini/{device_id}/up/cmd_resp（已有）
-Payload：device.CommandResponse{ query_event: QueryEventResp{ repeated EventMsg msg_list } }
+Topic：bird_mini/{device_id}/up/cmd_response
+Payload：device.CommandResponse{ query_event: QueryEventResp{ repeated EventMsg msg_list, int64 next_cursor_id } }
 ```
 
-`msg_list` 按 `video.start_time` 升序排列，APP 拿到列表后可展示录像时间线。
+`msg_list` 按 `id` 升序排列（即录像创建顺序），每页最多 128 条。`next_cursor_id != 0` 时表示还有更多数据，APP 应将其作为下次请求的 `after_id` 继续拉取，直到 `next_cursor_id == 0`。
 
 ---
 
@@ -198,7 +198,7 @@ message WebRTCPlayOrSeek {
 |-------|--------|--------|---------|------|
 | `bird_mini/{device_id}/up/event` | 设备 | 后端 | `device.EventMsg` | 事件录像上报 |
 | `bird_mini/{device_id}/down/cmd` | APP/后端 | 设备 | `device.Command` (QueryEvent) | 查询录像列表 |
-| `bird_mini/{device_id}/up/cmd_resp` | 设备 | APP/后端 | `device.CommandResponse` | 录像列表响应 |
+| `bird_mini/{device_id}/up/cmd_response` | 设备 | APP/后端 | `device.CommandResponse` | 录像列表响应 |
 | `bird_mini/{device_id}/down/webrtc` | APP | 设备 | `webrtc.WebrtcSignal` | Offer / 播控信令 |
 | `bird_mini/{device_id}/up/webrtc/{app_client_id}` | 设备 | APP | `webrtc.WebrtcSignal` | Answer / Candidate |
 

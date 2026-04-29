@@ -130,6 +130,33 @@ APP 触发分页查询时，`start_time` 取本地 `known_last_event_time`，`en
 
 ---
 
+## APP 需订阅的 Topic 清单
+
+所有 topic 中的 `{device_id}` 为目标设备 ID（如 `dev-001`）。
+
+| Topic | 方向 | QoS | Payload 类型 | 说明 |
+|-------|------|-----|--------------|------|
+| `bird_mini/{device_id}/up/heartbeat` | 设备→APP | 0 | `device.Heartbeat` | 定期心跳，携带 `timestamp`；APP 可据此判断设备在线状态 |
+| `bird_mini/{device_id}/up/status` | 设备→APP | 0 | `device.StatusReport` | 状态变化/录像完成/重连后立即上报；携带 `last_event_time`，是触发 QueryEvent 的依据 |
+| `bird_mini/{device_id}/up/event` | 设备→APP | 1 | `device.EventMsg` | 实时事件推送（运动检测等）；advisory，不保证送达，以 QueryEvent 为权威 |
+| `bird_mini/{device_id}/up/cmd_response` | 设备→APP | 1 | `device.CommandResponse` | 指令响应，包含 `QueryEventResp`（分页录像列表）及其他指令结果 |
+| `bird_mini/{device_id}/up/webrtc/{app_client_id}` | 设备→APP | 0 | `webrtc.WebrtcSignal` | P2P WebRTC 信令（Answer / ICE Candidate）；`{app_client_id}` 为 APP 端唯一标识，APP 只需订阅自己 client_id 的 topic |
+
+### APP 下发 Topic（仅供参考）
+
+| Topic | 方向 | QoS | Payload 类型 | 说明 |
+|-------|------|-----|--------------|------|
+| `bird_mini/{device_id}/down/cmd` | APP→设备 | 1 | `device.Command` | 指令通道，包含 QueryEvent（分页查询）、JoinRoom、LeaveRoom 等 |
+| `bird_mini/{device_id}/down/webrtc` | APP→设备 | 0 | `webrtc.WebrtcSignal` | P2P WebRTC 信令（Offer / ICE Candidate） |
+
+### 订阅说明
+
+- APP 管理**多台设备**时，可使用通配符 `bird_mini/+/up/#` 统一订阅所有设备上行消息，再按 topic 中的 `device_id` 分发。
+- `up/webrtc/{app_client_id}` 中的 `app_client_id` 由 APP 在发起 P2P 信令时自行指定（写入 `WebrtcSignal.app_client_id`）；设备回复时原样写回，APP 可用精确 topic 订阅，也可用 `bird_mini/{device_id}/up/webrtc/+` 匹配所有 client。
+- `up/status` 和 `up/heartbeat` 使用 QoS 0，不保证送达；APP 订阅时同样用 QoS 0 即可，无需 QoS 1 持久化。
+
+---
+
 ## 实现清单
 
 ### device.proto
