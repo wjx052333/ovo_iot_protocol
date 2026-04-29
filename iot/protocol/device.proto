@@ -54,10 +54,11 @@ message QueryEvent {
   int64  after_id   = 3;  // pagination cursor: 0 = first page; use next_cursor_id from prev response
 }
 
-message AgentCommand {
-  string type   = 1;
-  string params = 2;  // JSON string
-}
+// AI Agent 下行指令（具体指令消息）
+message OpenLight  {}
+message CloseLight {}
+message TakePhoto  {}
+message Reboot     {}
 
 enum CommandRole {
   COMMAND_ROLE_UNSPECIFIED = 0;
@@ -69,11 +70,14 @@ enum CommandRole {
 // 下行：指令
 message Command {
   oneof payload {
-    JoinRoom     join_room   = 1;
-    LeaveRoom    leave_room  = 2;
-    UploadLogs   upload_logs = 3;
-    QueryEvent   query_event = 4;
-    AgentCommand agent_cmd   = 5;  // AI Agent 下发指令
+    JoinRoom   join_room   = 1;
+    LeaveRoom  leave_room  = 2;
+    UploadLogs upload_logs = 3;
+    QueryEvent query_event = 4;
+    OpenLight  open_light  = 5;
+    CloseLight close_light = 7;
+    TakePhoto  take_photo  = 8;
+    Reboot     reboot      = 9;
   }
   CommandRole role = 6;  // 指令来源
 }
@@ -104,11 +108,10 @@ message QueryEventResp {
   int64             next_cursor_id = 2;  // 0 = no more data; >0 = pass as after_id for next page
 }
 
-message AgentCmdResp {
-  CmdResult result = 1;
-  string    reason = 2;
-  string    data   = 3;
-}
+message OpenLightResp  { CmdResult result = 1; string reason = 2; }
+message CloseLightResp { CmdResult result = 1; string reason = 2; }
+message TakePhotoResp  { CmdResult result = 1; string data   = 2; }  // data: photo URL or base64
+message RebootResp     { CmdResult result = 1; string reason = 2; }
 
 message CommandResponse {
   string device_id = 1;
@@ -117,7 +120,10 @@ message CommandResponse {
     LeaveRoomResp  leave_room  = 3;
     UploadLogsResp upload_logs = 4;
     QueryEventResp query_event = 5;
-    AgentCmdResp   agent_cmd   = 6;  // AI Agent 指令响应
+    OpenLightResp  open_light  = 6;
+    CloseLightResp close_light = 8;
+    TakePhotoResp  take_photo  = 9;
+    RebootResp     reboot      = 10;
   }
   CommandRole role = 7;  // mirrors Command.role
 }
