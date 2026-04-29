@@ -25,3 +25,5 @@ device.ChatResponse.livekit_url     max_size:64
 device.ChatResponse.token           max_size:768
 
 device.CronRequest.message          type:FT_POINTER
+
+device.QueryEventResp.msg_list      max_count:128

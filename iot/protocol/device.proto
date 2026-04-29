@@ -25,10 +25,11 @@ message Heartbeat {
 
 // 上行：状态上报
 message StatusReport {
-  string device_id  = 1;
-  bool   streaming  = 2;
-  string room_id    = 3;
-  int32  signal_dbm = 4;
+  string device_id       = 1;
+  bool   streaming       = 2;
+  string room_id         = 3;
+  int32  signal_dbm      = 4;
+  int64  last_event_time = 5;  // start_time of most recent completed recording (unix sec); 0 = none
 }
 
 // 下行：指令
