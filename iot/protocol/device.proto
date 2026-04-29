@@ -1,6 +1,24 @@
 syntax = "proto3";
 package device;
 
+message VideoMsg {
+  int64    id         = 1;
+  float    length     = 2;
+  int64    start_time = 3;
+  int64    end_time   = 4;
+}
+
+enum EventType {
+  EVENT_TYPE_UND    = 0;
+  EVENT_TYPE_MOVING = 1;
+}
+
+message EventMsg {
+  EventType type   = 1;
+  int64  timestamp = 2;
+  VideoMsg  video  = 3;
+}
+
 // 上行：心跳
 message Heartbeat {
   string device_id = 1;
@@ -9,30 +27,15 @@ message Heartbeat {
 
 // 上行：状态上报
 message StatusReport {
-  string device_id  = 1;
-  bool   streaming  = 2;
-  string room_id    = 3;
-  int32  signal_dbm = 4;
+  string device_id       = 1;
+  bool   streaming       = 2;
+  string room_id         = 3;
+  int32  signal_dbm      = 4;
+  int64  last_event_time = 5;  // start_time of most recent completed recording (unix sec); 0 = none
 }
 
 message UploadLogs {
-  string upload_url = 1;  // URL where device should upload logs
-}
-
-// 下行：指令
-message Command {
-  string role = 4;  // "backend", "app", or "agent"
-  oneof payload {
-    JoinRoom  join_room  = 1;
-    LeaveRoom leave_room = 2;
-    UploadLogs upload_logs = 3;
-    AgentCommand agent_cmd = 5;
-  }
-}
-
-message AgentCommand {
-  string type   = 1;
-  string params = 2;  // JSON string
+  string upload_url = 1;
 }
 
 message JoinRoom {
@@ -43,6 +46,36 @@ message JoinRoom {
 
 message LeaveRoom {
   string room_id = 1;
+}
+
+message QueryEvent {
+  int64  start_time = 1;
+  int64  end_time   = 2;
+  int64  after_id   = 3;  // pagination cursor: 0 = first page; use next_cursor_id from prev response
+}
+
+message AgentCommand {
+  string type   = 1;
+  string params = 2;  // JSON string
+}
+
+enum CommandRole {
+  COMMAND_ROLE_UNSPECIFIED = 0;
+  COMMAND_ROLE_BACKEND     = 1;
+  COMMAND_ROLE_APP         = 2;
+  COMMAND_ROLE_AGENT       = 3;
+}
+
+// 下行：指令
+message Command {
+  oneof payload {
+    JoinRoom     join_room   = 1;
+    LeaveRoom    leave_room  = 2;
+    UploadLogs   upload_logs = 3;
+    QueryEvent   query_event = 4;  // from main
+    AgentCommand agent_cmd   = 5;  // AI Agent 下发指令
+  }
+  CommandRole role = 6;  // 指令来源
 }
 
 // 上行：指令结果
@@ -66,6 +99,11 @@ message UploadLogsResp {
   string    reason = 2;
 }
 
+message QueryEventResp {
+  repeated EventMsg msg_list       = 1;
+  int64             next_cursor_id = 2;  // 0 = no more data; >0 = pass as after_id for next page
+}
+
 message AgentCmdResp {
   CmdResult result = 1;
   string    reason = 2;
@@ -74,33 +112,76 @@ message AgentCmdResp {
 
 message CommandResponse {
   string device_id = 1;
-  string role      = 5;  // mirrors Command.role
   oneof payload {
     JoinRoomResp   join_room   = 2;
     LeaveRoomResp  leave_room  = 3;
     UploadLogsResp upload_logs = 4;
-    AgentCmdResp   agent_cmd   = 6;
+    QueryEventResp query_event = 5;  // from main
+    AgentCmdResp   agent_cmd   = 6;  // AI Agent 指令响应
   }
+  CommandRole role = 7;  // mirrors Command.role
 }
 
 enum PtzAction {
   PTZ_ACTION_UNSPECIFIED = 0;
-  PTZ_ACTION_MOVE = 1;  // 开始移动
-  PTZ_ACTION_STOP = 2;  // 停止移动
+  PTZ_ACTION_MOVE = 1;
+  PTZ_ACTION_STOP = 2;
 }
 
 enum PtzDirection {
   PTZ_DIR_UNSPECIFIED = 0;
-  PTZ_DIR_UP = 1;
-  PTZ_DIR_DOWN = 2;
-  PTZ_DIR_LEFT = 3;
-  PTZ_DIR_RIGHT = 4;
-  PTZ_DIR_UP_LEFT = 5;
-  // ... 其他方向
+  PTZ_DIR_UP          = 1;
+  PTZ_DIR_DOWN        = 2;
+  PTZ_DIR_LEFT        = 3;
+  PTZ_DIR_RIGHT       = 4;
+  PTZ_DIR_UP_LEFT     = 5;
 }
 
 message PtzControl {
-  PtzAction action = 1;
-  PtzDirection direction = 2; // 当 action 为 MOVE 时有效
-  int32 speed = 3;            // 移动速度，例如 1-10
+  PtzAction    action    = 1;
+  PtzDirection direction = 2;
+  int32        speed     = 3;
+}
+
+enum ChatAction {
+  CHAT_ACTION_UNSPECIFIED = 0;
+  CHAT_ACTION_LIVEKIT     = 1;
+}
+
+message ChatRequest {
+  ChatAction action = 1;
+}
+
+message CronRequest {
+  string message = 1;
+}
+
+message AgentRequest {
+  oneof payload {
+    ChatRequest chat = 2;
+    CronRequest cron = 3;
+  }
+}
+
+enum AgentRespCode {
+  AGENT_RESP_OK   = 0;
+  AGENT_RESP_BUSY = 1;
+}
+
+message ChatResponse {
+  AgentRespCode result      = 1;
+  string        room_id     = 2;
+  string        livekit_url = 3;
+  string        token       = 4;
+}
+
+message CronResponse {
+  AgentRespCode result = 1;
+}
+
+message AgentResponse {
+  oneof payload {
+    ChatResponse chat = 2;
+    CronResponse cron = 3;
+  }
 }
