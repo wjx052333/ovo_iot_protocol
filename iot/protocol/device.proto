@@ -50,6 +50,7 @@ message LeaveRoom {
 message QueryEvent {
   int64  start_time = 1;
   int64  end_time   = 2;
+  int64  after_id   = 3;  // pagination cursor: 0 = first page; use next_cursor_id from prev response
 }
 
 message Command {
@@ -83,7 +84,8 @@ message UploadLogsResp {
 }
 
 message QueryEventResp {
-  repeated EventMsg msg_list = 1;
+  repeated EventMsg msg_list       = 1;
+  int64             next_cursor_id = 2;  // 0 = no more data; >0 = pass as after_id for next page
 }
 
 message CommandResponse {
