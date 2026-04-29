@@ -35,7 +35,7 @@ message StatusReport {
 }
 
 message UploadLogs {
-  string upload_url = 1;
+  string upload_url = 1;  // URL where device should upload logs
 }
 
 message JoinRoom {
@@ -72,7 +72,7 @@ message Command {
     JoinRoom     join_room   = 1;
     LeaveRoom    leave_room  = 2;
     UploadLogs   upload_logs = 3;
-    QueryEvent   query_event = 4;  // from main
+    QueryEvent   query_event = 4;
     AgentCommand agent_cmd   = 5;  // AI Agent 下发指令
   }
   CommandRole role = 6;  // 指令来源
@@ -116,7 +116,7 @@ message CommandResponse {
     JoinRoomResp   join_room   = 2;
     LeaveRoomResp  leave_room  = 3;
     UploadLogsResp upload_logs = 4;
-    QueryEventResp query_event = 5;  // from main
+    QueryEventResp query_event = 5;
     AgentCmdResp   agent_cmd   = 6;  // AI Agent 指令响应
   }
   CommandRole role = 7;  // mirrors Command.role
@@ -124,8 +124,8 @@ message CommandResponse {
 
 enum PtzAction {
   PTZ_ACTION_UNSPECIFIED = 0;
-  PTZ_ACTION_MOVE = 1;
-  PTZ_ACTION_STOP = 2;
+  PTZ_ACTION_MOVE        = 1;
+  PTZ_ACTION_STOP        = 2;
 }
 
 enum PtzDirection {

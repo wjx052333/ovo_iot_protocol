@@ -15,3 +15,8 @@ webrtc.IceServer.username           max_size:64
 webrtc.IceServer.credential         max_size:64
 
 webrtc.IceConfig.ice_servers        max_count:8
+
+webrtc.WebRTCError.msg              type:FT_POINTER
+
+webrtc.WebRTCOffer.sdp              type:FT_POINTER
+webrtc.WebRTCAnswer.sdp             type:FT_POINTER
