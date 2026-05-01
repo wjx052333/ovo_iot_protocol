@@ -54,11 +54,6 @@ message CloseLight {}
 message TakePhoto  {}
 message Reboot     {}
 
-message RelayControl {
-  bool   on          = 1;  // true = 开，false = 关
-  uint32 duration_ms = 2;  // 自动关闭延迟（毫秒），0 = 不自动关闭
-}
-
 enum CommandRole {
   COMMAND_ROLE_UNSPECIFIED = 0;
   COMMAND_ROLE_BACKEND     = 1;
@@ -77,7 +72,6 @@ message Command {
     CloseLight close_light = 7;
     TakePhoto  take_photo  = 8;
     Reboot        reboot        = 9;
-    RelayControl  relay_control = 10;
   }
   CommandRole role = 6;  // 指令来源
 }
@@ -112,7 +106,6 @@ message OpenLightResp     { CmdResult result = 1; string reason = 2; }
 message CloseLightResp    { CmdResult result = 1; string reason = 2; }
 message TakePhotoResp     { CmdResult result = 1; string data   = 2; }  // data: photo URL or base64
 message RebootResp        { CmdResult result = 1; string reason = 2; }
-message RelayControlResp  { CmdResult result = 1; string reason = 2; }
 
 message CommandResponse {
   string device_id = 1;
@@ -125,7 +118,6 @@ message CommandResponse {
     CloseLightResp close_light = 8;
     TakePhotoResp  take_photo  = 9;
     RebootResp        reboot        = 10;
-    RelayControlResp  relay_control = 11;
   }
   CommandRole role = 7;  // mirrors Command.role
 }
