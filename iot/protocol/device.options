@@ -2,9 +2,6 @@
 # max_size constrains string fields to fixed-size char arrays; pb_decode returns
 # false with "string overflow" if input exceeds the limit.
 
-device.Heartbeat.device_id          max_size:32
-
-device.StatusReport.device_id       max_size:32
 device.StatusReport.room_id         max_size:32
 
 device.JoinRoom.room_id             max_size:32
