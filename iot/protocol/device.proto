@@ -21,11 +21,12 @@ message EventMsg {
 
 // 上行：状态上报（兼作周期心跳）
 message StatusReport {
-  bool   streaming       = 2;
-  string room_id         = 3;
-  int32  signal_dbm      = 4;
-  int64  last_event_time = 5;  // start_time of most recent completed recording (unix sec); 0 = none
-  int64  timestamp       = 6;  // device local time (unix ms)
+  bool          streaming       = 2;
+  string        room_id         = 3;
+  int32         signal_dbm      = 4;
+  int64         last_event_time = 5;  // start_time of most recent completed recording (unix sec); 0 = none
+  int64         timestamp       = 6;  // device local time (unix ms)
+  DeviceVersion version         = 7;
 }
 
 message UploadLogs {
@@ -184,4 +185,10 @@ message AgentResponse {
     ChatResponse chat = 2;
     CronResponse cron = 3;
   }
+}
+
+message DeviceVersion {
+  int32 major = 1;
+  int32 minor = 2;
+  int32 patch = 3;
 }
