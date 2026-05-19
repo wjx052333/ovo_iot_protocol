@@ -1,0 +1,114 @@
+syntax = "proto3";
+package mqtt_agent;
+
+enum AgentAction {
+  AGENT_ACTION_UNSPECIFIED = 0;
+  AGENT_ACTION_CHAT        = 1;
+  AGENT_ACTION_STOP        = 2;
+  AGENT_ACTION_INTERRUPT   = 3;
+}
+
+// ── uplink: {prefix}/{user_id}/{device_id}/up/agent_request ──────────────────
+// Session control only; voice travels via up/opus, App text via {user_id}/up/agent_msg
+message AgentRequest {
+  AgentAction action  = 1;
+  string      chat_id = 2;  // optional, echoed back in AgentResponse
+}
+
+// ── downlink: {prefix}/{user_id}/{device_id}/down/agent_response ─────────────
+//             {prefix}/{user_id}/down/agent_response (App channel)
+enum AgentResponseCode {
+  AGENT_RESPONSE_CODE_UNSPECIFIED = 0;
+  AGENT_RESPONSE_CODE_OK         = 1;  // session established
+  AGENT_RESPONSE_CODE_QUIT       = 2;  // session ended: timeout or explicit STOP
+  AGENT_RESPONSE_CODE_NO_REQUEST = 3;  // data received without prior CHAT request
+  AGENT_RESPONSE_CODE_ERROR      = 4;  // rejected (e.g. device not found, internal error)
+}
+
+message AgentResponse {
+  AgentResponseCode code   = 1;
+  string            reason = 2;  // human-readable detail, optional
+}
+
+// ── Device uplink: {prefix}/{user_id}/{device_id}/up/opus ───────────────────────
+// ── Device downlink: {prefix}/{user_id}/{device_id}/down/opus ───────────────────────
+message AudioStats {
+  string transcript   = 1;  // STT result
+  string llm_response = 2;  // LLM text (streaming)
+  string extra        = 3;
+  bool   tool_calling = 4;  // LLM executing tool; client shows loading
+}
+
+message AudioFrame {
+  uint64     seq          = 1;
+  uint64     timestamp_ms = 2;
+  bytes      opus_data    = 3;
+  bool       is_eos       = 4;  // TTS done or interrupted
+  AudioStats stats        = 5;
+}
+
+// ── App uplink: {prefix}/{user_id}/up/agent_msg ───────────────────────────
+message AppMsg {
+  oneof input {
+    string         text = 1;  // free-text input
+    ChoiceResponse choice = 2;  // choice selection
+  }
+}
+
+message ChoiceResponse {
+  string group_id = 1;
+  string label    = 2;
+  string question = 3;
+}
+
+// ── App downlink: {prefix}/{user_id}/down/agent_msg ───────────────────────
+message Choice {
+  string label       = 1;
+  string description = 2;
+  string payload     = 3;
+}
+
+message ChoiceGroup {
+  string        group_id     = 1;
+  string        question     = 2;
+  bool          multi_select = 3;
+  repeated Choice choices    = 4;
+}
+
+message MultiChoiceGroup {
+  repeated ChoiceGroup choice_groups = 1;
+}
+
+message AlertMsg {
+  string text      = 1;
+  string alert_id  = 2;
+  string task_id   = 3;  // task that triggered this alert (empty if not task-driven)
+}
+
+message Hint {
+  string label = 1;  // button text, 1-4 chars
+  string text  = 2;  // sent as AppMsg(text=...) when tapped
+}
+
+message AgentText {
+  string       text  = 1;
+  repeated Hint hints = 2;
+}
+
+enum AgentState {
+  AGENT_STATE_IDLE          = 0;
+  AGENT_STATE_THINKING      = 1;
+  AGENT_STATE_SPEAKING      = 2;
+  AGENT_STATE_WAITING_INPUT = 3;
+}
+
+message AgentMsg {
+  uint64 seq_id = 1;
+  AgentState state  = 3;
+
+  oneof agent {
+    AgentText        chat    = 4;
+    MultiChoiceGroup choices = 5;
+    AlertMsg         alert   = 6;
+  }
+}

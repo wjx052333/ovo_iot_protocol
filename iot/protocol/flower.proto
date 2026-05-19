@@ -1,0 +1,106 @@
+syntax = "proto3";
+package flower;
+
+enum CmdResult {
+  OK   = 0;
+  BUSY = 1;
+}
+
+enum OtaStatus {
+  OTA_STARTED    = 0;
+  OTA_PROGRESS   = 1;
+  OTA_SUCCESS    = 2;
+  OTA_FAILED     = 3;
+}
+
+enum CommandRole {
+  COMMAND_ROLE_UNSPECIFIED = 0;
+  COMMAND_ROLE_BACKEND     = 1;
+  COMMAND_ROLE_APP         = 2;
+  COMMAND_ROLE_AGENT       = 3;
+}
+
+message Metric {
+  string key   = 1;
+  oneof value {
+    double double_value = 2;
+    int64  int64_value  = 3;
+  }
+}
+
+message StatusReport {
+  int64          timestamp   = 2;  // device local time (unix ms)
+  DeviceVersion  version     = 3;
+  string         device_type = 4;
+  repeated Metric metrics    = 5;
+}
+
+message RelayControl {
+  bool   on          = 1;
+  uint32 duration_ms = 2;  // auto-off delay (ms); 0 = no auto-off
+}
+
+message RelayControlResp {
+  CmdResult result = 1;
+  string    reason = 2;
+}
+
+message OtaCommand {
+  string url     = 1;                      // HTTPS URL of the firmware binary
+  DeviceVersion expected_version = 2;      // expected version
+  DeviceVersion mini_compact_version = 3;  // compact version
+}
+
+message OtaResponse {
+  OtaStatus status   = 1;
+  int32     progress = 2;  // 0-100, valid when status == OTA_PROGRESS
+  string    message  = 3;  // error detail on OTA_FAILED
+}
+
+enum SnapshotResultCode {
+  SNAPSHOT_OK               = 0;  // uploaded successfully
+  SNAPSHOT_BUSY             = 1;  // camera already in use
+  SNAPSHOT_CAPTURE_FAILED   = 2;  // V4L2 / hardware capture error
+  SNAPSHOT_UPLOAD_FAILED    = 3;  // HTTP PUT network error / timeout
+  SNAPSHOT_UPLOAD_REJECTED  = 4;  // HTTP PUT returned non-2xx (URL expired / auth)
+  SNAPSHOT_INVALID_URL      = 5;  // upload_url empty or malformed
+}
+
+message SnapshotCommand {
+  string upload_url = 1;  // pre-signed PUT URL (backend/app-generated, HTTPS)
+  uint32 width      = 2;  // capture width px; 0 = device default (640)
+  uint32 height     = 3;  // capture height px; 0 = device default (480)
+}
+
+message SnapshotResponse {
+  SnapshotResultCode result = 1;
+  uint32             size   = 2;  // bytes uploaded on success
+  string             reason = 3;  // error detail on failure
+}
+
+// 下行：指令
+message Command {
+  CommandRole role = 1;
+  oneof payload {
+    RelayControl relay_control = 2;
+    OtaCommand   ota           = 3;
+    SnapshotCommand snapshot   = 4;
+  }
+}
+
+// 上行：指令结果
+// device_id not included — it is conveyed by the MQTT topic
+message CommandResponse {
+  CommandRole role = 1; //mirrors Command.role
+  oneof payload {
+    RelayControlResp relay_control = 2;
+    OtaResponse      ota           = 3;
+    SnapshotResponse snapshot      = 4;
+  }
+}
+
+message DeviceVersion {
+  int32 major = 1;
+  int32 minor = 2;
+  int32 patch = 3;
+}

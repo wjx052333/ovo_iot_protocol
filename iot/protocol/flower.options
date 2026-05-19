@@ -1,0 +1,13 @@
+# nanopb field options for flower.proto
+flower.RelayControlResp.reason  max_size:64
+
+flower.OtaCommand.url       max_size:256
+flower.OtaResponse.message  max_size:32
+
+flower.SnapshotCommand.upload_url  max_size:512
+flower.SnapshotResponse.reason     max_size:64
+
+flower.StatusReport.device_type  max_size:32
+
+flower.Metric.key                max_size:32
+flower.Metric                    max_count:8
