@@ -4,6 +4,7 @@
 
 | 日期 | 版本 | 变更 |
 |------|------|------|
+| 2026-05-19 | v1.2 | 新增第2节"设备 MQTT 直控 Topic"；第6节改为指向 agent-integration.md |
 | 2026-04-22 | v1.1 | 明确 MQTT `client_id` 命名规范：`app_{user_id}_{8-hex}`，替代原随机串方案；新增第3节"MQTT 接入身份规范" |
 | — | v1.0 | 初始版本 |
 
@@ -51,6 +52,19 @@ Authorization: Bearer <access_token>
 GET /api/my/devices
 Authorization: Bearer <token>
 ```
+
+### 设备 MQTT 直控 Topic
+
+APP 可直接通过 MQTT 订阅/发布以下 Topic 实现设备控制和状态同步，无需经过后端 REST 接口。
+
+| Topic | APP 角色 | Payload | QoS | 说明 |
+|-------|---------|---------|-----|------|
+| `bird_mini/{device_id}/up/status` | Sub | `device.StatusReport` | 0 | 设备状态实时同步（在线、电量等） |
+| `bird_mini/{device_id}/down/cmd` | Pub | `device.Command` | 1 | 下发控制指令（如 JoinRoom、LeaveRoom） |
+| `bird_mini/{device_id}/down/ptz` | Pub | `device.PtzControl` | 0 | PTZ 云台控制（高频低延迟，QoS=0） |
+| `bird_mini/{device_id}/up/cmd_response` | Sub | `device.CommandResponse` | 1 | 设备指令执行结果回复 |
+
+> Payload 定义见 `device.proto`（`protocol/ovo_iot_protocol/iot/protocol/device.proto`）。
 
 ---
 
@@ -213,7 +227,15 @@ ovo_iot_protocol/iot/protocol/webrtc.proto
 
 ---
 
-## 6. REST API 一览
+## 6. MQTT Agent App 文字对话
+
+Agent 文字对话（会话流程、视觉告警推送、任务系统、Session 重建约束等）详见：
+
+**[`agent-integration.md`](agent-integration.md)**
+
+---
+
+## 7. REST API 一览
 
 | 方法 | 端点 | 鉴权 | 说明 |
 |------|------|------|------|
@@ -227,7 +249,7 @@ ovo_iot_protocol/iot/protocol/webrtc.proto
 
 ---
 
-## 7. 推荐接入路径
+## 8. 推荐接入路径
 
 **使用 LiveKit 方案**（第4节）：实现最简单，使用官方 LiveKit Client SDK，无需自己做 WebRTC 信令，稳定性好。
 

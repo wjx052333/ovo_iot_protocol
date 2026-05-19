@@ -146,6 +146,25 @@ AgentResponse { code: AGENT_RESPONSE_CODE_QUIT }
 
 会话也会因 **30 分钟无消息**自动超时，Agent 发送 `AgentResponse(QUIT, reason="idle_timeout")`。
 
+### 3.5 ⚠️ Session 重建约束（重要）
+
+> **每次发送 `agent_msg` 之前，App 必须先收到当前 session 的 `AgentResponse(OK)`。**
+
+以下场景 App **必须**重走 CHAT → OK 握手，不能直接发 `agent_msg`：
+
+| 场景 | 说明 |
+|------|------|
+| App **断连重连**后 | 即使本地仍认为 session 有效，Worker 侧可能已不存在 |
+| **长时间未收到任何 down 消息** | Session 可能已 idle 超时（30 分钟），Worker 已销毁 |
+| 收到 `AgentResponse(QUIT)` 后**又想继续对话** | Worker 已结束本次 session，需重新建立 |
+
+**原因：**
+1. **Worker 生命周期**：Worker 是 per-user 临时进程，idle 超时或 crash 后会被销毁。此时 `agent_msg` topic 无订阅者，消息被 broker **静默丢弃**，App 收不到任何反馈。
+2. **水平扩容**：多实例部署时，共享订阅可能将 `agent_msg` 路由到没有该用户 Worker 的实例，消息无法处理，且无法判断应转发还是丢弃。
+3. **`agent_request` 不受此限制**：`agent_request` 由 main.py 统一通过共享订阅消费，内部查找或创建 Worker 后路由，链路完整。
+
+每次先 CHAT 确保 Worker 存活后再发消息，成本仅一次 MQTT 往返（< 50 ms），相比 LLM 响应延迟（2–10 s）可忽略。
+
 ---
 
 ## 4. AgentState 说明
@@ -427,6 +446,7 @@ APP                                       Agent
 - [ ] 订阅 `bird_mini/{user_id}/down/agent_response`
 - [ ] 订阅 `bird_mini/{user_id}/down/agent_msg`
 - [ ] 发起对话：发送 `AgentRequest(CHAT)` → 等待 `AgentResponse(OK)` → 发送 `AppMsg`
+- [ ] 断连重连、idle 超时、收到 QUIT 后，**重新走 CHAT → OK 握手**，禁止直接发 `agent_msg`（见 3.5 节）
 - [ ] 处理 `AgentMsg.chat`（文字回复 + hints 快捷按钮）
 - [ ] 处理 `AgentMsg.choices`（多选组，用户选择后发 `ChoiceResponse`）
 - [ ] 处理 `AgentMsg.alert`（告警推送，`alert_id` + `task_id` 可跳转详情）
