@@ -245,7 +245,7 @@ GET /api/tasks?status=active
         "end": "22:00",
         "days": 127
       },
-      "enabled_actions": ["notify_push", "record_clip"],
+      "enabled_actions": ["notify_push"],
       "call_911_confirmed": false,
       "status": "active",
       "triggered_count": 3,
@@ -274,7 +274,7 @@ Content-Type: application/json
     "end": "22:00",
     "days": 127
   },
-  "enabled_actions": ["notify_push", "record_clip"],
+  "enabled_actions": ["notify_push"],
   "call_911_confirmed": false
 }
 ```
@@ -349,8 +349,8 @@ GET /api/tasks/{task_id}/executions?limit=20&before_ts=2026-05-19+12:00:00
       "event_id": "12345",
       "triggered_at": "2026-05-19 12:00:00",
       "vlm_description": "一名男性站在门口，手提包裹",
-      "agent_reasoning": "检测到陌生人，触发 notify_push 和 record_clip",
-      "actions_taken": ["notify_push", "record_clip"],
+      "agent_reasoning": "检测到陌生人，触发 notify_push",
+      "actions_taken": ["notify_push"],
       "user_feedback": "",
       "created_at": "2026-05-19 12:00:01"
     }
