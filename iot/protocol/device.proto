@@ -55,6 +55,17 @@ message CloseLight {}
 message TakePhoto  {}
 message Reboot     {}
 
+message UploadVideo {
+  int64  video_id   = 1;
+  string upload_url = 2;
+}
+
+message UploadVideoResp {
+  CmdResult result   = 1;
+  string    reason   = 2;
+  int64     video_id = 3;
+}
+
 enum CommandRole {
   COMMAND_ROLE_UNSPECIFIED = 0;
   COMMAND_ROLE_BACKEND     = 1;
@@ -73,6 +84,7 @@ message Command {
     CloseLight close_light = 7;
     TakePhoto  take_photo  = 8;
     Reboot        reboot        = 9;
+    UploadVideo upload_video = 10;
   }
   CommandRole role = 6;  // 指令来源
 }
@@ -119,6 +131,7 @@ message CommandResponse {
     CloseLightResp close_light = 8;
     TakePhotoResp  take_photo  = 9;
     RebootResp        reboot        = 10;
+    UploadVideoResp upload_video = 11;
   }
   CommandRole role = 7;  // mirrors Command.role
 }
