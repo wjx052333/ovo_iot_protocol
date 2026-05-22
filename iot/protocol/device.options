@@ -12,6 +12,17 @@ device.LeaveRoom.room_id            max_size:32
 
 device.UploadLogs.upload_url        max_size:512
 
+device.UploadVideo.upload_url       max_size:512
+device.UploadVideoResp.reason       max_size:64
+
+device.OssCredential.access_key_id      max_size:64
+device.OssCredential.access_key_secret  max_size:64
+device.OssCredential.security_token     max_size:1024
+device.OssCredential.bucket             max_size:64
+device.OssCredential.region             max_size:32
+device.OssCredential.key_prefix         max_size:64
+device.OssCredentialResp.reason         max_size:64
+
 device.CommandResponse.device_id    max_size:32
 device.JoinRoomResp.reason          max_size:64
 device.LeaveRoomResp.reason         max_size:64

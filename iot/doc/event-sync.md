@@ -1,246 +1,212 @@
-# 设备事件同步方案
+# 事件同步方案
 
-## 背景
+## Changelog
 
-设备通过 `bird_mini/{device_id}/up/event` 实时推送录像事件（运动检测等）给 APP。但该方案存在两类丢失场景：
-
-- **APP 离线**：推送时 APP 未订阅，消息被 broker 丢弃（QoS 1 不持久化）
-- **设备离线**：录像期间断网，重连后 APP 不知晓新事件
-
-需要一套可靠同步机制，使 APP 在任意时刻上线后都能获取完整事件列表。
+| 版本 | 日期 | 说明 |
+|------|------|------|
+| v0.3 | 2026-05-22 | 引入 STS 自驱上传：Backend 定期向设备推送 OssCredential（STS 临时凭证），设备录像完成后**自主**上传到 OSS，上传成功后发 `up/event`；Backend 收到 `up/event` 即写入 `oss_key`。去除 Backend 主动触发 `UploadVideo` 的路径（仅保留为 backward compat 兜底）；去除 `notify/event_ready`（`up/event` 本身即"视频已就绪"信号）。 |
+| v0.2 | 2026-05-22 | 架构调整为三端同步（设备↔Backend↔App）：Backend 成为事件权威数据源，App 不再直接向设备查询，改为向 Backend 拉列表（`GET /api/devices/{id}/events`）。 |
+| v0.1 | — | 初版：App 直接向设备发 QueryEvent 拉事件列表，依赖 StatusReport.last_event_time 触发。 |
 
 ---
 
-## 方案：StatusReport 携带 last_event_time
+## 背景：三端同步问题
 
-### 核心思路
+系统中存在三个角色：**设备**、**Backend**、**App**。一个完整的录像事件需要经历以下阶段：
 
-`up/event` 保留为**实时推送通道**（advisory），不承担可靠性保证。
+```
+设备录像完成
+    │
+    ▼
+设备自主上传到 OSS（STS 临时凭证，无需 Backend 介入）
+    │
+    ▼ 上传成功
+设备发布 up/event（EventMsg, QoS 1）── 此刻视频已在 OSS
+    │
+    ├──────────────────────────────────► App（直接订阅，实时感知）
+    │
+    ▼
+Backend ExHook 收到 up/event：
+  - INSERT IGNORE → device_events
+  - 计算 oss_key，UPDATE device_events
+```
 
-可靠性由 **QueryEvent** 承担：APP 在需要时主动向设备查询指定时间范围内的事件列表，设备从 SQLite 响应。
+三端各自需要解决的问题：
 
-触发 QueryEvent 的时机由 `StatusReport.last_event_time` 驱动：设备在每次心跳/状态上报时，携带本地最新完成录像的 unix 时间戳。APP 将收到的值与本地已知值对比，若更大则发起 QueryEvent 同步。
+| 问题 | 负责方 |
+|------|--------|
+| 新事件实时通知 App | 设备直发 `up/event`（上传完成后，可靠） |
+| 设备离线期间事件不丢 | Backend 主动向设备 QueryEvent 补拉元数据 |
+| App 离线期间事件不丢 | App 上线后向 Backend REST 拉增量 |
+| STS 凭证管理 | Backend 定期推送 OssCredential，设备存储并自主使用 |
 
-### 协议变更
+---
 
-在 `device.proto` 的 `StatusReport` 中新增字段：
+## 一、设备 → Backend 同步
 
-```protobuf
-message StatusReport {
-  string device_id      = 1;
-  bool   streaming      = 2;
-  string room_id        = 3;
-  int32  signal_dbm     = 4;
-  int64  last_event_time = 5;  // 最新完成录像的 start_time（unix 秒），0 表示无录像
+### 1.1 STS 凭证下发
+
+**触发时机**：
+1. 设备 MQTT 连接建立时（`OnClientConnected`），Backend 立即推送一次
+2. 设备主动上行 `up/req_oss_cred`（无凭证或凭证即将过期时）
+3. Backend 后台线程每 60s 扫描一次，凭证剩余有效期 < `STS_REFRESH_SEC`（默认 300s）时刷新
+
+**下行指令**：`down/cmd`（`Command.oss_credential`，QoS 1）
+
+```proto
+message OssCredential {
+  string access_key_id     = 1;
+  string access_key_secret = 2;
+  string security_token    = 3;  // STS session token
+  int64  expiry_time       = 4;  // unix seconds
+  string bucket            = 5;
+  string region            = 6;
+  string key_prefix        = 7;  // e.g. "events/"
 }
 ```
 
-`last_event_time = 0` 表示设备暂无录像记录，APP 不触发查询。
+设备收到后存入内存（`MqttClient::m_oss_creds_`），ACK 一条 `OssCredentialResp`。
 
-### 设备行为
+### 1.2 实时路径（设备在线 + 有 STS 凭证）
 
-1. **心跳/StatusReport**：每次发布时，从 `VideoStore::latest_event_time()` 读取最新 `start_time`，填入 `last_event_time`。
-2. **录像完成时**：立即发布一次 StatusReport（不等下次心跳），使 APP 能快速感知新事件。
-3. **断网重连后**：MQTT 连接建立后立即发布一次 StatusReport，使离线期间的积累事件尽快同步。
+1. 录像完成 → `on_recording_done` 回调触发
+2. `_self_upload`：读取内存中的 STS 凭证，调用 `mhc_oss_upload()`（带 `x-oss-security-token` 头）
+3. **上传成功** → 设备发布 `up/event`（`device.EventMsg`，QoS 1）+ `up/status`（更新 `last_event_time`）
+4. Backend ExHook 收到 `up/event`：
+   - `INSERT IGNORE` 到 `device_events`（幂等）
+   - 计算 `oss_key = {key_prefix}{device_id}/{video_start}_{video_id}.mp4`
+   - `UPDATE device_events SET oss_key = ...`
+5. App 收到 `up/event` 后可立即展示新事件（视频已可播放）
 
-### APP 行为
+**失败处理**：上传失败则不发 `up/event`，设备记 warn 日志。Backend 后续 QueryEvent 同步可补拉元数据，视频可通过 `UploadVideo` 命令兜底上传（见 §1.4）。
 
-1. 本地维护 `known_last_event_time`（持久化，初始为 0）。
-2. 收到任意 StatusReport 时：
-   - 若 `last_event_time > known_last_event_time`：发送 QueryEvent 查询 `(known_last_event_time, now)`
-   - 收到 QueryEventResp 后：更新 `known_last_event_time = last_event_time`，合并事件到本地列表
-3. APP 上线后主动拉取一次当前设备的 StatusReport（或等待设备下次心跳，通常 ≤30s）。
+**凭证不足**：若 `expiry_time ≤ now + 30s`，跳过自主上传，设备发 `up/req_oss_cred` 请求新凭证，待凭证到达后视频仍需通过 `UploadVideo` 兜底（凭证过期期间的录像无法自动补传，属已知限制）。
 
-### 双离线场景覆盖
+### 1.3 离线恢复路径（设备断线重连后批量同步）
 
-| 场景 | 行为 |
+**目的**：同步离线期间产生的事件**元数据**（不触发上传，上传由设备自驱）。
+
+**触发时机**：设备 MQTT 重连成功后立即发布 `StatusReport`，携带 `last_event_time`（本地最新完成录像的 `start_time`）。
+
+**Backend 行为**：
+1. 收到 `StatusReport.last_event_time > known_last_event_time` → 发 `QueryEvent`
+2. 设备按游标分页（每页 ≤ 128 条）逐页响应 `QueryEventResp`
+3. Backend 每收到一页 → `INSERT IGNORE` 全部事件元数据
+4. 重复直到 `next_cursor_id == 0`，更新 `known_last_event_time`
+
+**`oss_key` 管理**：`oss_key` 是 Backend 按公式 `{prefix}{device_id}/{video_start}_{video_id}.mp4` 算出的确定性路径，只要有事件元数据就能计算，不依赖设备上报。以下三个时机均会写入：
+
+| 时机 | 操作 |
 |------|------|
-| APP 在线，设备在线 | `up/event` 实时推送；StatusReport 也触发 QueryEvent（幂等，返回同一批数据） |
-| APP 离线，设备在线 | APP 上线后收到 StatusReport，触发 QueryEvent 补拉 |
-| APP 在线，设备离线 | 设备重连后立即发 StatusReport，触发 QueryEvent |
-| 双方同时离线 | 双方均上线后，设备发 StatusReport，APP 触发 QueryEvent |
+| 收到 `up/event` | INSERT IGNORE 元数据 + UPDATE oss_key |
+| 收到 `QueryEventResp` | INSERT IGNORE 元数据（含 oss_key） |
+| 收到 `UploadVideoResp OK` | UPDATE oss_key |
 
-### up/event 的定位
+> **注意**：`oss_key` 表示"视频**应当**在 OSS 上的路径"，而非"视频**已经**存在于 OSS"。如果设备离线期间录像但因无 STS 凭证而未能上传，Backend 通过 QueryEvent 补拉后仍会写入 oss_key，但对应文件并不存在于 OSS。此时 App 调用 `GET /api/events/{id}/video-url` 会拿到一个预签名 GET URL，访问该 URL 时 OSS 返回 404——这是预期行为，说明视频尚未上传。App 应将此 404 展示为"视频暂不可用"，而非通用错误。如需补传，由 Backend 发 UploadVideo 命令触发设备重传。
 
-- **不保证送达**：QoS 1，但 APP 可能不在线
-- **用途**：在线状态下减少 QueryEvent 延迟（APP 可直接从推送中更新本地列表，跳过轮询）
-- **不是唯一来源**：任何情况下 QueryEvent 都是权威数据源
+### 1.4 UploadVideo 兜底路径（backward compat）
+
+适用场景：设备无 STS 凭证时产生的视频、或 STS 上传失败需人工补传时。
+
+- Backend 发 `UploadVideo`（含预签名 PUT URL）
+- 设备上传后发 `UploadVideoResp`
+- Backend 收到 `CMD_RESULT_OK` → 计算并写入 `oss_key`
+- **此路径不产生 `up/event`**，App 需通过 REST 拉取感知
 
 ---
 
-## QueryEvent 分页机制
+## 二、App ↔ Backend 同步
 
-### 背景
+### 2.1 App 获取事件列表（REST 拉取）
 
-`QueryEventResp.msg_list` 在 nanopb 层限制为 128 条（`max_count:128`）。若查询时间段内录像超过 128 条，需要分页获取，否则超出部分被静默截断，APP 无法感知。
+**接口**：`GET /api/devices/{device_id}/events?after_id=0&limit=50`
 
-### 设计原则
+- 需要 JWT 鉴权，校验调用者拥有该设备
+- 游标分页，`after_id` 为上次返回的最后一条 `id`，`limit` 最大 200
+- 响应字段：
 
-- **游标分页**：以 SQLite 自增 `id` 为游标，而非 `OFFSET`。`OFFSET` 在中间有新增时会漂移（同一条被跳过或重复），`id` 单调递增，分页结果稳定。
-- **设备无状态**：设备不保存任何分页会话，每次请求独立执行 SQL，重连/重启不影响一致性。
-
-### 协议变更
-
-```protobuf
-message QueryEvent {
-  int64 start_time = 1;
-  int64 end_time   = 2;
-  int64 after_id   = 3;  // 游标：0 = 第一页；上次响应的 next_cursor_id = 下一页起点
+```json
+{
+  "events": [
+    {
+      "id": 123,
+      "event_type": 1,
+      "event_ts": 1716000000,
+      "video_start": 1716000000,
+      "video_end": 1716000030,
+      "video_length": 30.0,
+      "video_uploaded": true
+    }
+  ],
+  "next_cursor_id": 124
 }
-
-message QueryEventResp {
-  repeated EventMsg msg_list       = 1;
-  int64             next_cursor_id = 2;  // 0 = 无更多数据；> 0 = 还有数据，作为下次 after_id
-}
 ```
 
-### 设备端 SQL
+- `video_uploaded: true` 表示 `oss_key` 已写入，可调 `/api/events/{id}/video-url` 获取播放地址
 
-```sql
-SELECT id, event_type, codec, start_time, end_time, duration, file_path
-FROM events
-WHERE start_time >= :t0 AND start_time <= :t1
-  AND end_time IS NOT NULL
-  AND id > :after_id
-ORDER BY id ASC
-LIMIT 128
-```
+**App 首次加载**：从 `after_id=0` 开始分页拉完；本地缓存最大 `id` 作为下次 `after_id`。
 
-设备逻辑：
-- 查到 128 条 → `next_cursor_id = metas[127].id`（可能还有更多）
-- 查到 < 128 条 → `next_cursor_id = 0`（最后一页）
+**App 从离线恢复**：以本地缓存的最大 `id` 作为 `after_id`，拉取增量即可。
 
-### APP 端分页循环
+### 2.2 App 实时感知新事件（MQTT 直订）
+
+App 直接订阅 `bird_mini/{device_id}/up/event`（或通配 `bird_mini/+/up/event`）。
+
+- `up/event` 发布时，视频**已上传到 OSS**，`video_uploaded` 即为 true
+- App 收到后可立即展示并调 `/api/events/{id}/video-url` 获取播放地址
+- QoS 1；App 离线期间丢失的消息通过 REST 拉增量补回
+
+### 2.3 App 获取视频播放地址
 
 ```
-after_id = 0
-loop:
-    send QueryEvent { start_time, end_time, after_id }
-    recv QueryEventResp { msg_list, next_cursor_id }
-    merge msg_list into local store
-    if next_cursor_id == 0: break
-    after_id = next_cursor_id
+GET /api/events/{id}/video-url
 ```
 
-**终止条件**：`next_cursor_id == 0`。即使 `msg_list` 恰好 128 条但无更多数据，设备也会返回 `next_cursor_id = 0`（通过 `LIMIT 128` 结果数判断）。
-
-### 与 last_event_time 的配合
-
-APP 触发分页查询时，`start_time` 取本地 `known_last_event_time`，`end_time` 取当前时间。分页循环完成后，更新 `known_last_event_time = StatusReport.last_event_time`。
+返回带 TTL 的预签名 GET URL（默认 1 小时），有本地缓存（剩余 > 5 分钟时复用）。
 
 ---
 
-## APP 需订阅的 Topic 清单
+## 三、各场景覆盖
 
-所有 topic 中的 `{device_id}` 为目标设备 ID（如 `dev-001`）。
-
-| Topic | 方向 | QoS | Payload 类型 | 说明 |
-|-------|------|-----|--------------|------|
-| `bird_mini/{device_id}/up/heartbeat` | 设备→APP | 0 | `device.Heartbeat` | 定期心跳，携带 `timestamp`；APP 可据此判断设备在线状态 |
-| `bird_mini/{device_id}/up/status` | 设备→APP | 0 | `device.StatusReport` | 状态变化/录像完成/重连后立即上报；携带 `last_event_time`，是触发 QueryEvent 的依据 |
-| `bird_mini/{device_id}/up/event` | 设备→APP | 1 | `device.EventMsg` | 实时事件推送（运动检测等）；advisory，不保证送达，以 QueryEvent 为权威 |
-| `bird_mini/{device_id}/up/cmd_response` | 设备→APP | 1 | `device.CommandResponse` | 指令响应，包含 `QueryEventResp`（分页录像列表）及其他指令结果 |
-| `bird_mini/{device_id}/up/webrtc/{app_client_id}` | 设备→APP | 0 | `webrtc.WebrtcSignal` | P2P WebRTC 信令（Answer / ICE Candidate）；`{app_client_id}` 为 APP 端唯一标识，APP 只需订阅自己 client_id 的 topic |
-
-### APP 下发 Topic（仅供参考）
-
-| Topic | 方向 | QoS | Payload 类型 | 说明 |
-|-------|------|-----|--------------|------|
-| `bird_mini/{device_id}/down/cmd` | APP→设备 | 1 | `device.Command` | 指令通道，包含 QueryEvent（分页查询）、JoinRoom、LeaveRoom 等 |
-| `bird_mini/{device_id}/down/webrtc` | APP→设备 | 0 | `webrtc.WebrtcSignal` | P2P WebRTC 信令（Offer / ICE Candidate） |
-
-### 订阅说明
-
-- APP 管理**多台设备**时，可使用通配符 `bird_mini/+/up/#` 统一订阅所有设备上行消息，再按 topic 中的 `device_id` 分发。
-- `up/webrtc/{app_client_id}` 中的 `app_client_id` 由 APP 在发起 P2P 信令时自行指定（写入 `WebrtcSignal.app_client_id`）；设备回复时原样写回，APP 可用精确 topic 订阅，也可用 `bird_mini/{device_id}/up/webrtc/+` 匹配所有 client。
-- `up/status` 和 `up/heartbeat` 使用 QoS 0，不保证送达；APP 订阅时同样用 QoS 0 即可，无需 QoS 1 持久化。
+| 场景 | 设备→Backend | App 感知新事件 |
+|------|-------------|---------------|
+| 三端全在线 | `up/event` 上传后实时 | 直接订阅 `up/event`（秒级） |
+| App 离线，其余在线 | Backend 写 DB，oss_key 已设 | App 上线后 REST 拉增量 |
+| 设备离线，其余在线 | 重连后 StatusReport → QueryEvent 补拉元数据；Backend 重新推送 OssCredential；设备上传后发 `up/event` | Backend 收到 `up/event` 后写 oss_key；App 收到 `up/event` 实时感知 |
+| 设备+App 均离线 | 同上 | App 上线后 REST 拉增量 |
+| STS 凭证过期/不足 | 视频元数据通过 QueryEvent 补拉；视频可通过 UploadVideo 兜底 | REST 拉取，`video_uploaded=false` 直到兜底上传完成 |
 
 ---
 
-## 实现清单
+## 四、App 订阅 Topic 清单
 
-### device.proto
-
-```diff
- message StatusReport {
-   string device_id      = 1;
-   bool   streaming      = 2;
-   string room_id        = 3;
-   int32  signal_dbm     = 4;
-+  int64  last_event_time = 5;
- }
-```
-
-### device.options
-
-```diff
-+device.StatusReport.last_event_time  // 无需选项，int64 原生支持
-```
-
-无需额外 options，`int64` 直接映射。
-
-### VideoStore 新增接口
-
-```cpp
-// 返回最新完成录像的 start_time（unix 秒），无记录时返回 0
-int64_t latest_event_time();
-```
-
-实现：`SELECT MAX(start_time) FROM events` 或缓存在内存中。
-
-### mqtt_client.cpp
-
-- `publishStatusReport()` 中填充 `sr.last_event_time`
-- `connectAndSubscribe()` 成功后立即调用 `publishStatusReport()`
-
-### iot_device.cpp
-
-- `set_video_store()` 中，在 `on_recording_done` 回调里额外调用 `publishStatusReport()`（录像完成立即上报）
+| Topic | 方向 | QoS | 说明 |
+|-------|------|-----|------|
+| `bird_mini/{device_id}/up/event` | 设备→App | 1 | 视频已上传，可直接播放；是新事件的权威信号 |
+| `bird_mini/{device_id}/up/status` | 设备→App | 0 | StatusReport，含 `last_event_time` |
+| `bird_mini/{device_id}/up/heartbeat` | 设备→App | 0 | 心跳，判断设备在线状态 |
+| `bird_mini/{device_id}/up/cmd_response` | 设备→App | 1 | 指令响应（QueryEventResp 等） |
+| `bird_mini/{device_id}/up/webrtc/{app_client_id}` | 设备→App | 0 | P2P WebRTC 信令 |
 
 ---
 
-## 测试用例覆盖
+## 五、实现清单
 
-### 单元测试（test_video_store）
+### 已完成
 
-| 用例 | 验证点 |
-|------|--------|
-| `LatestEventTime_empty` | 无录像时返回 0 |
-| `LatestEventTime_single` | 一条录像后返回其 start_time |
-| `LatestEventTime_multiple` | 多条录像时返回最大值 |
-| `LatestEventTime_after_finish` | `finish_recording` 后值更新 |
+- `device.proto`：`StatusReport.last_event_time`、`QueryEvent/QueryEventResp` 分页游标、`OssCredential/OssCredentialResp`
+- `device.options`：OssCredential 字段 max_size
+- `VideoStore`：`import_file()`、`latest_event_time()`、`set_on_recording_done()`
+- `MqttClient`：STS 凭证存储、`OssCredential` cmd 处理（case 11）、`_self_upload()`（上传成功后发 `up/event` + StatusReport）、`request_oss_credential()`
+- `IotDevice`：`set_video_store()` 注册 `on_recording_done` → `_self_upload`
+- `StsClient`：Aliyun STS AssumeRole（HMAC-SHA1 签名）
+- `ExhookServer`：OssCredential 定期推送（后台线程）、`OnClientConnected` 触发推送、`up/req_oss_cred` 处理、`up/event` 收到后写 `oss_key`
+- `mhc_oss_upload`：支持 `security_token` 参数（`x-oss-security-token` 头）
+- `MySQLClient`：`list_device_events()`、`get_event_by_video_id()`、`insert_device_events()`、`update_event_oss_key()`
+- `HttpServer`：`GET /api/devices/{id}/events`
 
-### 单元测试（test_video_store）— 分页
+### 待完成
 
-| 用例 | 验证点 |
-|------|--------|
-| `QueryPagination_first_page` | 130 条录像，after_id=0，返回 128 条，next_cursor_id = 第 128 条 id |
-| `QueryPagination_second_page` | 接上页游标，返回剩余 2 条，next_cursor_id = 0 |
-| `QueryPagination_exact_128` | 恰好 128 条，after_id=0，next_cursor_id = 0（不超出） |
-| `QueryPagination_empty` | 时间范围内无数据，返回空列表，next_cursor_id = 0 |
-| `QueryPagination_cursor_stability` | 分页过程中新增录像，游标不漂移（已取到的 id 不重复） |
-
-### 集成测试（test_event_sync，新建）
-
-使用 mock MQTT broker（或 spy 方式拦截 publish 调用）：
-
-| 用例 | 场景 | 验证点 |
-|------|------|--------|
-| `StatusReport_carries_last_event_time` | 有录像时发布 StatusReport | `last_event_time` == VideoStore 返回值 |
-| `StatusReport_zero_when_no_recording` | 无录像时发布 StatusReport | `last_event_time == 0` |
-| `StatusReport_published_on_recording_done` | 完成录像后 | 立即收到新 StatusReport，`last_event_time` 更新 |
-| `StatusReport_published_on_reconnect` | 模拟断线重连 | 重连后立即收到 StatusReport |
-| `QueryEvent_triggered_by_last_event_time` | APP 收到更大的 `last_event_time` | 发出 QueryEvent，收到正确 EventMsg 列表 |
-| `QueryEvent_not_triggered_when_equal` | APP 收到相同 `last_event_time` | 不发出 QueryEvent |
-| `App_offline_recovery` | APP 断线重连后收到 StatusReport | 触发 QueryEvent，补拉正确 |
-| `QueryEvent_pagination_single_pass` | 50 条录像，after_id=0 | 单次返回全部，next_cursor_id=0 |
-| `QueryEvent_pagination_multi_page` | 260 条录像，分 3 次查询 | 累计取到 260 条，第 3 次 next_cursor_id=0 |
-| `QueryEvent_pagination_cursor_correct` | 第 2 页 after_id = 第 1 页最后一条 id | 第 2 页第一条 id > after_id，无重复无遗漏 |
-
-### mock_peer.py 扩展（端到端）
-
-在现有 mock_peer.py 基础上新增：
-
-- `subscribe_to_status_report(device_id)` → 收到 StatusReport 时回调，解析 `last_event_time`
-- `trigger_query_event_if_newer(known_time)` → 发送 QueryEvent，返回 EventMsg 列表
-- 端到端测试：运行 `test_event_sync_e2e.py`，验证 APP-offline / device-offline 两个场景下事件最终一致
+- [ ] App：订阅 `bird_mini/+/up/event`，收到后立即展示（视频已可播放）
+- [ ] App：首次加载 / 离线恢复时调 `GET /api/devices/{id}/events` 拉增量
+- [ ] 设备端：凭证不足时自动调 `request_oss_credential()` 并排队待传视频（当前限制：凭证过期期间的录像需人工触发 UploadVideo 兜底）
