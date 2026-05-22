@@ -4,9 +4,10 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v0.3 | 2026-05-22 | 引入 STS 自驱上传：Backend 定期向设备推送 OssCredential（STS 临时凭证），设备录像完成后**自主**上传到 OSS，上传成功后发 `up/event`；Backend 收到 `up/event` 即写入 `oss_key`。去除 Backend 主动触发 `UploadVideo` 的路径（仅保留为 backward compat 兜底）；去除 `notify/event_ready`（`up/event` 本身即"视频已就绪"信号）。 |
-| v0.2 | 2026-05-22 | 架构调整为三端同步（设备↔Backend↔App）：Backend 成为事件权威数据源，App 不再直接向设备查询，改为向 Backend 拉列表（`GET /api/devices/{id}/events`）。 |
-| v0.1 | — | 初版：App 直接向设备发 QueryEvent 拉事件列表，依赖 StatusReport.last_event_time 触发。 |
+| v0.4 | 2026-05-22 | 改为设备主动申请预签名 URL 方案：设备录像完成后发 `up/req_upload_url`，Backend 生成预签名 PUT URL 并下发 `UploadVideo` 命令，设备 HTTP PUT 上传后发 `up/event`。去除 STS、OssCredential、req_oss_cred，所有云提供商通用。 |
+| v0.3 | 2026-05-22 | 引入 STS 自驱上传：Backend 定期向设备推送 OssCredential（STS 临时凭证），设备录像完成后**自主**上传到 OSS，上传成功后发 `up/event`。 |
+| v0.2 | 2026-05-22 | 架构调整为三端同步（设备↔Backend↔App）：Backend 成为事件权威数据源，App 不再直接向设备查询。 |
+| v0.1 | — | 初版：App 直接向设备发 QueryEvent 拉事件列表。 |
 
 ---
 
@@ -17,8 +18,14 @@
 ```
 设备录像完成
     │
+    ▼ on_recording_done 触发
+设备发布 up/req_upload_url（EventMsg）
+    │
     ▼
-设备自主上传到 OSS（STS 临时凭证，无需 Backend 介入）
+Backend ExHook 收到：计算 oss_key，生成预签名 PUT URL，下发 UploadVideo 命令
+    │
+    ▼
+设备 HTTP PUT 上传到 OSS（通用预签名 URL，无需云 SDK）
     │
     ▼ 上传成功
 设备发布 up/event（EventMsg, QoS 1）── 此刻视频已在 OSS
@@ -38,80 +45,61 @@ Backend ExHook 收到 up/event：
 | 新事件实时通知 App | 设备直发 `up/event`（上传完成后，可靠） |
 | 设备离线期间事件不丢 | Backend 主动向设备 QueryEvent 补拉元数据 |
 | App 离线期间事件不丢 | App 上线后向 Backend REST 拉增量 |
-| STS 凭证管理 | Backend 定期推送 OssCredential，设备存储并自主使用 |
+| OSS 上传凭证 | Backend 按需生成预签名 PUT URL 下发给设备 |
 
 ---
 
 ## 一、设备 → Backend 同步
 
-### 1.1 STS 凭证下发
+### 1.1 实时路径（设备在线）
 
-**触发时机**：
-1. 设备 MQTT 连接建立时（`OnClientConnected`），Backend 立即推送一次
-2. 设备主动上行 `up/req_oss_cred`（无凭证或凭证即将过期时）
-3. Backend 后台线程每 60s 扫描一次，凭证剩余有效期 < `STS_REFRESH_SEC`（默认 300s）时刷新
-
-**下行指令**：`down/cmd`（`Command.oss_credential`，QoS 1）
-
-```proto
-message OssCredential {
-  string access_key_id     = 1;
-  string access_key_secret = 2;
-  string security_token    = 3;  // STS session token
-  int64  expiry_time       = 4;  // unix seconds
-  string bucket            = 5;
-  string region            = 6;
-  string key_prefix        = 7;  // e.g. "events/"
-}
-```
-
-设备收到后存入内存（`MqttClient::m_oss_creds_`），ACK 一条 `OssCredentialResp`。
-
-### 1.2 实时路径（设备在线 + 有 STS 凭证）
-
-1. 录像完成 → `on_recording_done` 回调触发
-2. `_self_upload`：读取内存中的 STS 凭证，调用 `mhc_oss_upload()`（带 `x-oss-security-token` 头）
-3. **上传成功** → 设备发布 `up/event`（`device.EventMsg`，QoS 1）+ `up/status`（更新 `last_event_time`）
-4. Backend ExHook 收到 `up/event`：
+1. 录像完成 → `on_recording_done` 触发
+2. 设备发布 `up/req_upload_url`（EventMsg，包含 video_id、start_time 等元数据）
+3. Backend ExHook 收到：
+   - 计算 `oss_key = {prefix}{device_id}/{video_start}_{video_id}.mp4`
+   - 调用 `OssPresigner::presign_put(oss_key)` 生成预签名 PUT URL（TTL 由 `OSS_PUT_URL_TTL_SEC` 配置）
+   - 下发 `UploadVideo` 命令（video_id + upload_url）
+4. 设备收到 `UploadVideo` → HTTP PUT 到预签名 URL
+5. **上传成功** → 设备发布 `up/event`（EventMsg，QoS 1）+ `up/status`
+6. Backend ExHook 收到 `up/event`：
    - `INSERT IGNORE` 到 `device_events`（幂等）
-   - 计算 `oss_key = {key_prefix}{device_id}/{video_start}_{video_id}.mp4`
-   - `UPDATE device_events SET oss_key = ...`
-5. App 收到 `up/event` 后可立即展示新事件（视频已可播放）
+   - 计算 `oss_key`，`UPDATE device_events SET oss_key = ...`
+7. App 收到 `up/event` 后可立即展示新事件（视频已可播放）
 
-**失败处理**：上传失败则不发 `up/event`，设备记 warn 日志。Backend 后续 QueryEvent 同步可补拉元数据，视频可通过 `UploadVideo` 命令兜底上传（见 §1.4）。
+**上传失败**：设备发布 `UploadVideoResp(FAIL)`，Backend 记录日志；事件元数据通过 `up/req_upload_url` 不会进 DB（需等 `up/event` 或 QueryEvent 补拉）。
 
-**凭证不足**：若 `expiry_time ≤ now + 30s`，跳过自主上传，设备发 `up/req_oss_cred` 请求新凭证，待凭证到达后视频仍需通过 `UploadVideo` 兜底（凭证过期期间的录像无法自动补传，属已知限制）。
+### 1.2 离线恢复路径（设备断线重连后批量同步）
 
-### 1.3 离线恢复路径（设备断线重连后批量同步）
-
-**目的**：同步离线期间产生的事件**元数据**（不触发上传，上传由设备自驱）。
+**目的**：同步离线期间产生的事件**元数据**（不触发上传，视频可通过 UploadVideo 兜底）。
 
 **触发时机**：设备 MQTT 重连成功后立即发布 `StatusReport`，携带 `last_event_time`（本地最新完成录像的 `start_time`）。
 
 **Backend 行为**：
 1. 收到 `StatusReport.last_event_time > known_last_event_time` → 发 `QueryEvent`
 2. 设备按游标分页（每页 ≤ 128 条）逐页响应 `QueryEventResp`
-3. Backend 每收到一页 → `INSERT IGNORE` 全部事件元数据
+3. Backend 每收到一页 → `INSERT IGNORE` 全部事件元数据（含 oss_key）
 4. 重复直到 `next_cursor_id == 0`，更新 `known_last_event_time`
 
-**`oss_key` 管理**：`oss_key` 是 Backend 按公式 `{prefix}{device_id}/{video_start}_{video_id}.mp4` 算出的确定性路径，只要有事件元数据就能计算，不依赖设备上报。以下三个时机均会写入：
+### 1.3 `oss_key` 管理
+
+`oss_key` 是 Backend 按公式 `{prefix}{device_id}/{video_start}_{video_id}.mp4` 算出的确定性路径，只要有事件元数据就能计算，不依赖设备上报。以下三个时机均会写入：
 
 | 时机 | 操作 |
 |------|------|
 | 收到 `up/event` | INSERT IGNORE 元数据 + UPDATE oss_key |
 | 收到 `QueryEventResp` | INSERT IGNORE 元数据（含 oss_key） |
-| 收到 `UploadVideoResp OK` | UPDATE oss_key |
+| 收到 `UploadVideoResp OK` | UPDATE oss_key（兜底路径） |
 
-> **注意**：`oss_key` 表示"视频**应当**在 OSS 上的路径"，而非"视频**已经**存在于 OSS"。如果设备离线期间录像但因无 STS 凭证而未能上传，Backend 通过 QueryEvent 补拉后仍会写入 oss_key，但对应文件并不存在于 OSS。此时 App 调用 `GET /api/events/{id}/video-url` 会拿到一个预签名 GET URL，访问该 URL 时 OSS 返回 404——这是预期行为，说明视频尚未上传。App 应将此 404 展示为"视频暂不可用"，而非通用错误。如需补传，由 Backend 发 UploadVideo 命令触发设备重传。
+> **注意**：`oss_key` 表示"视频**应当**在 OSS 上的路径"，而非"视频**已经**存在于 OSS"。如果设备离线期间录像但因无预签名 URL 而未能上传，Backend 通过 QueryEvent 补拉后仍会写入 oss_key，但对应文件并不存在于 OSS。此时 App 调用 `GET /api/events/{id}/video-url` 会拿到一个预签名 GET URL，访问该 URL 时 OSS 返回 404——这是预期行为。App 应将此 404 展示为"视频暂不可用"。如需补传，由 Backend 发 UploadVideo 命令（需先为设备生成新的预签名 PUT URL）。
 
 ### 1.4 UploadVideo 兜底路径（backward compat）
 
-适用场景：设备无 STS 凭证时产生的视频、或 STS 上传失败需人工补传时。
+适用场景：离线期间产生的视频需补传，或任意需要重新上传的场景。
 
 - Backend 发 `UploadVideo`（含预签名 PUT URL）
-- 设备上传后发 `UploadVideoResp`
-- Backend 收到 `CMD_RESULT_OK` → 计算并写入 `oss_key`
-- **此路径不产生 `up/event`**，App 需通过 REST 拉取感知
+- 设备上传后：**上传成功发 `up/event`**（与实时路径一致）；失败发 `UploadVideoResp(FAIL)`
+- Backend 收到 `up/event` → 写入 oss_key
+- App 通过 MQTT 订阅或 REST 拉取感知
 
 ---
 
@@ -170,11 +158,11 @@ GET /api/events/{id}/video-url
 
 | 场景 | 设备→Backend | App 感知新事件 |
 |------|-------------|---------------|
-| 三端全在线 | `up/event` 上传后实时 | 直接订阅 `up/event`（秒级） |
+| 三端全在线 | `up/req_upload_url` → `UploadVideo` → 上传 → `up/event` | 直接订阅 `up/event`（秒级） |
 | App 离线，其余在线 | Backend 写 DB，oss_key 已设 | App 上线后 REST 拉增量 |
-| 设备离线，其余在线 | 重连后 StatusReport → QueryEvent 补拉元数据；Backend 重新推送 OssCredential；设备上传后发 `up/event` | Backend 收到 `up/event` 后写 oss_key；App 收到 `up/event` 实时感知 |
+| 设备离线，其余在线 | 重连后 StatusReport → QueryEvent 补拉元数据；重新上线后走正常路径 | Backend 收到 `up/event` 后写 oss_key；App 收到 `up/event` 实时感知 |
 | 设备+App 均离线 | 同上 | App 上线后 REST 拉增量 |
-| STS 凭证过期/不足 | 视频元数据通过 QueryEvent 补拉；视频可通过 UploadVideo 兜底 | REST 拉取，`video_uploaded=false` 直到兜底上传完成 |
+| 设备离线期间有录像但未上传 | QueryEvent 补拉元数据+oss_key；视频待补传 | REST 拉取，`video_uploaded=false`（oss_key 已写，但文件不在 OSS）直到补传完成 |
 
 ---
 
@@ -194,19 +182,17 @@ GET /api/events/{id}/video-url
 
 ### 已完成
 
-- `device.proto`：`StatusReport.last_event_time`、`QueryEvent/QueryEventResp` 分页游标、`OssCredential/OssCredentialResp`
-- `device.options`：OssCredential 字段 max_size
-- `VideoStore`：`import_file()`、`latest_event_time()`、`set_on_recording_done()`
-- `MqttClient`：STS 凭证存储、`OssCredential` cmd 处理（case 11）、`_self_upload()`（上传成功后发 `up/event` + StatusReport）、`request_oss_credential()`
-- `IotDevice`：`set_video_store()` 注册 `on_recording_done` → `_self_upload`
-- `StsClient`：Aliyun STS AssumeRole（HMAC-SHA1 签名）
-- `ExhookServer`：OssCredential 定期推送（后台线程）、`OnClientConnected` 触发推送、`up/req_oss_cred` 处理、`up/event` 收到后写 `oss_key`
-- `mhc_oss_upload`：支持 `security_token` 参数（`x-oss-security-token` 头）
+- `device.proto`：`StatusReport.last_event_time`、`QueryEvent/QueryEventResp` 分页游标、`UploadVideo/UploadVideoResp`
+- `VideoStore`：`import_file()`、`latest_event_time()`、`set_on_recording_done()`、`get_meta()`
+- `MqttClient`：`on_recording_done` → 发 `up/req_upload_url`；`UploadVideo` 成功 → 发 `up/event`
+- `IotDevice`：`set_video_store()` 注册 VideoStore 到 MqttClient
+- `OssPresigner`：支持 Aliyun 和 Tencent COS 预签名 PUT URL
+- `ExhookServer`：`up/req_upload_url` 处理（presign + 下发 UploadVideo）、`up/event` 收到后写 oss_key、QueryEvent 补拉
 - `MySQLClient`：`list_device_events()`、`get_event_by_video_id()`、`insert_device_events()`、`update_event_oss_key()`
-- `HttpServer`：`GET /api/devices/{id}/events`
+- `HttpServer`：`GET /api/devices/{id}/events`、`GET /api/events/{id}/video-url`
 
 ### 待完成
 
 - [ ] App：订阅 `bird_mini/+/up/event`，收到后立即展示（视频已可播放）
 - [ ] App：首次加载 / 离线恢复时调 `GET /api/devices/{id}/events` 拉增量
-- [ ] 设备端：凭证不足时自动调 `request_oss_credential()` 并排队待传视频（当前限制：凭证过期期间的录像需人工触发 UploadVideo 兜底）
+- [ ] 上传失败重传：Backend 可在收到 `UploadVideoResp(FAIL)` 后重新生成预签名 URL 并重发 `UploadVideo`
