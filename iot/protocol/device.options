@@ -13,6 +13,7 @@ device.LeaveRoom.room_id            max_size:32
 device.UploadLogs.upload_url        max_size:512
 
 device.UploadVideo.upload_url       max_size:512
+device.UploadVideo.thumbnail_url    max_size:512
 device.UploadVideoResp.reason       max_size:64
 
 device.OssCredential.access_key_id      max_size:64

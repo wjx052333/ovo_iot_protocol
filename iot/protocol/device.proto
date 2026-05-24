@@ -56,8 +56,9 @@ message TakePhoto  {}
 message Reboot     {}
 
 message UploadVideo {
-  int64  video_id   = 1;
-  string upload_url = 2;
+  int64  video_id       = 1;
+  string upload_url     = 2;
+  string thumbnail_url  = 3;
 }
 
 message UploadVideoResp {
