@@ -4,6 +4,7 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v0.5 | 2026-05-24 | 新增 App OSS STS 临时凭证接口（`GET /api/oss/credentials`）：App 可自主生成预签名 GET URL，无需逐个请求 Backend；存储路径迁移至 `events/{user_id}/{device_id}/...`；新增 AWS S3 支持。 |
 | v0.4 | 2026-05-22 | 改为设备主动申请预签名 URL 方案：设备录像完成后发 `up/req_upload_url`，Backend 生成预签名 PUT URL 并下发 `UploadVideo` 命令，设备 HTTP PUT 上传后发 `up/event`。去除 STS、OssCredential、req_oss_cred，所有云提供商通用。 |
 | v0.3 | 2026-05-22 | 引入 STS 自驱上传：Backend 定期向设备推送 OssCredential（STS 临时凭证），设备录像完成后**自主**上传到 OSS，上传成功后发 `up/event`。 |
 | v0.2 | 2026-05-22 | 架构调整为三端同步（设备↔Backend↔App）：Backend 成为事件权威数据源，App 不再直接向设备查询。 |
@@ -152,6 +153,49 @@ GET /api/events/{id}/video-url
 
 返回带 TTL 的预签名 GET URL（默认 1 小时），有本地缓存（剩余 > 5 分钟时复用）。
 
+### 2.4 App 获取 OSS 临时凭证（自主生成预签名 URL）
+
+> 适用场景：App 需要频繁访问大量视频/缩略图时，避免每次都请求 Backend 生成预签名 URL。
+
+**接口**：`GET /api/oss/credentials`（需 JWT 鉴权）
+
+**响应（200 OK）**：
+
+```json
+{
+  "provider":          "aliyun",
+  "access_key_id":     "STS.xxx",
+  "access_key_secret": "yyy",
+  "security_token":    "zzz",
+  "expiry_time":       1748100000,
+  "bucket":            "my-bucket",
+  "endpoint":          "oss-cn-hangzhou.aliyuncs.com",
+  "region":            "cn-hangzhou",
+  "key_prefix":        "events/{user_id}/"
+}
+```
+
+- `expiry_time`：Unix 秒，凭证过期时间（TTL 12 小时）
+- `key_prefix`：调用者所有事件文件的路径前缀，格式 `events/{user_id}/`
+- `provider`：`"aliyun"` / `"tencent"` / `"aws"`，决定客户端使用哪种签名算法
+
+**凭证刷新策略**：
+
+```
+if (now() + 600 > expiry_time) → 重新调用 GET /api/oss/credentials
+```
+
+即在过期前 10 分钟刷新，防止凭证在使用途中过期。
+
+**App 本地生成预签名 GET URL 步骤**：
+
+1. 调用 `GET /api/oss/credentials` 拿到凭证（本地缓存，按上述策略刷新）
+2. 由 `key_prefix` + `{device_id}/` + `{ts}_{id}.mp4`（或 `.jpg`）拼出完整 OSS key
+3. 使用对应云 SDK 或本地签名算法，用 `(access_key_id, access_key_secret, security_token)` 生成预签名 GET URL
+4. 直接访问 OSS，无需再调 Backend
+
+凭证权限仅限该用户前缀下文件的 `GetObject` / `HeadObject`，不可写入。
+
 ---
 
 ## 三、各场景覆盖
@@ -186,7 +230,9 @@ GET /api/events/{id}/video-url
 - `VideoStore`：`import_file()`、`latest_event_time()`、`set_on_recording_done()`、`get_meta()`
 - `MqttClient`：`on_recording_done` → 发 `up/req_upload_url`；`UploadVideo` 成功 → 发 `up/event`
 - `IotDevice`：`set_video_store()` 注册 VideoStore 到 MqttClient
-- `OssPresigner`：支持 Aliyun 和 Tencent COS 预签名 PUT URL
+- `OssPresigner`：支持 Aliyun、Tencent COS、AWS S3 预签名 PUT/GET URL
+- `StsService`：Aliyun / Tencent / AWS STS AssumeRole，返回 12h 只读临时凭证
+- `HttpServer`：`GET /api/oss/credentials`（JWT 鉴权，返回 STS 临时凭证 + key_prefix）
 - `ExhookServer`：`up/req_upload_url` 处理（presign + 下发 UploadVideo）、`up/event` 收到后写 oss_key、QueryEvent 补拉
 - `MySQLClient`：`list_device_events()`、`get_event_by_video_id()`、`insert_device_events()`、`update_event_oss_key()`
 - `HttpServer`：`GET /api/devices/{id}/events`、`GET /api/events/{id}/video-url`
