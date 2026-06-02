@@ -13,10 +13,25 @@ enum EventType {
   EVENT_TYPE_MOVING = 1;
 }
 
+message EventDetail {
+  EventType type      = 1;
+  int64     timestamp = 2;
+  string    desc      = 3;
+}
+
+message EventList {
+  repeated EventDetail details = 1;
+}
+
 message EventMsg {
-  EventType type   = 1;
-  int64  timestamp = 2;
+  int64     timestamp = 2;
   VideoMsg  video  = 3;
+  EventList list = 4;     
+}
+
+message PreAlert {
+  EventDetail event = 1;
+  bytes thumbnail = 2;  // ≤4KB JPEG
 }
 
 // 上行：状态上报（兼作周期心跳）
