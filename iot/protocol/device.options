@@ -37,6 +37,6 @@ device.CronRequest.message          type:FT_POINTER
 
 device.QueryEventResp.msg_list      max_count:128
 
-device.PreAlert.thumbnail           max_size:4096
-device.EventDetail.desc             max_size:128
+device.PreAlert.thumbnail           type:FT_POINTER
+device.EventDetail.desc             type:FT_POINTER
 device.EventList.details            max_count:8
