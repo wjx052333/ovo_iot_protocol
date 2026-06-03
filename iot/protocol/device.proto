@@ -9,8 +9,12 @@ message VideoMsg {
 }
 
 enum EventType {
-  EVENT_TYPE_UND    = 0;
-  EVENT_TYPE_MOVING = 1;
+  EVENT_TYPE_UND           = 0;
+  EVENT_TYPE_MOVING        = 1;
+  EVENT_TYPE_OBJECT_DETECT = 2;
+  EVENT_TYPE_PERSON        = 3;
+  EVENT_TYPE_FALL          = 4;
+  EVENT_TYPE_SOUND         = 5;
 }
 
 message EventDetail {
