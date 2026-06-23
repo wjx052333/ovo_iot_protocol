@@ -40,12 +40,13 @@ message PreAlert {
 
 // 上行：状态上报（兼作周期心跳）
 message StatusReport {
-  bool          streaming       = 2;
-  string        room_id         = 3;
-  int32         signal_dbm      = 4;
-  int64         last_event_time = 5;  // start_time of most recent completed recording (unix sec); 0 = none
-  int64         timestamp       = 6;  // device local time (unix ms)
-  DeviceVersion version         = 7;
+  bool          streaming              = 2;
+  string        room_id               = 3;
+  int32         signal_dbm            = 4;
+  int64         last_event_time       = 5;  // start_time of most recent completed recording (unix sec); 0 = none
+  int64         timestamp             = 6;  // device local time (unix ms)
+  DeviceVersion version               = 7;
+  int64         oss_credential_expiry = 8;  // unix seconds; 0 = no credential held
 }
 
 message UploadLogs {
@@ -93,7 +94,8 @@ message OssCredential {
   int64  expiry_time       = 4;  // unix seconds
   string bucket            = 5;
   string region            = 6;
-  string key_prefix        = 7;  // e.g. "events/"
+  string key_prefix        = 7;  // device-specific prefix, e.g. "events/uid123/dev-001/"
+  string endpoint          = 8;  // e.g. "oss-cn-hangzhou.aliyuncs.com"
 }
 
 message OssCredentialResp {
