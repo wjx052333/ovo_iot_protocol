@@ -52,7 +52,6 @@ message QueryEvent {
 // AI Agent 下行指令（具体指令消息）
 message OpenLight  {}
 message CloseLight {}
-message TakePhoto  {}
 message Reboot     {}
 
 message UploadVideo {
@@ -82,6 +81,25 @@ message OssCredentialResp {
   string    reason = 2;
 }
 
+enum SnapshotResultCode {
+  SNAPSHOT_OK               = 0;  // uploaded successfully
+  SNAPSHOT_BUSY             = 1;  // camera already in use
+  SNAPSHOT_CAPTURE_FAILED   = 2;  // V4L2 / hardware capture error
+  SNAPSHOT_UPLOAD_FAILED    = 3;  // HTTP PUT network error / timeout
+  SNAPSHOT_UPLOAD_REJECTED  = 4;  // HTTP PUT returned non-2xx (URL expired / auth)
+  SNAPSHOT_INVALID_URL      = 5;  // upload_url empty or malformed
+}
+
+message SnapshotCommand {
+  string upload_url = 1;  // pre-signed PUT URL (backend/app-generated, HTTPS)
+}
+
+message SnapshotResponse {
+  SnapshotResultCode result = 1;
+  uint32             size   = 2;  // bytes uploaded on success
+  string             reason = 3;  // error detail on failure
+}
+
 enum CommandRole {
   COMMAND_ROLE_UNSPECIFIED = 0;
   COMMAND_ROLE_BACKEND     = 1;
@@ -98,7 +116,7 @@ message Command {
     QueryEvent query_event = 4;
     OpenLight  open_light  = 5;
     CloseLight close_light = 7;
-    TakePhoto  take_photo  = 8;
+    SnapshotCommand snapshot        = 8;
     Reboot          reboot          = 9;
     UploadVideo     upload_video    = 10;
     OssCredential   oss_credential  = 11;
@@ -135,7 +153,6 @@ message QueryEventResp {
 
 message OpenLightResp     { CmdResult result = 1; string reason = 2; }
 message CloseLightResp    { CmdResult result = 1; string reason = 2; }
-message TakePhotoResp     { CmdResult result = 1; string data   = 2; }  // data: photo URL or base64
 message RebootResp        { CmdResult result = 1; string reason = 2; }
 
 message CommandResponse {
@@ -147,7 +164,7 @@ message CommandResponse {
     QueryEventResp query_event = 5;
     OpenLightResp  open_light  = 6;
     CloseLightResp close_light = 8;
-    TakePhotoResp  take_photo  = 9;
+    SnapshotResponse    snapshot        = 9;
     RebootResp          reboot          = 10;
     UploadVideoResp     upload_video    = 11;
     OssCredentialResp   oss_credential  = 12;

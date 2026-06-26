@@ -24,6 +24,9 @@ device.OssCredential.region             max_size:32
 device.OssCredential.key_prefix         max_size:64
 device.OssCredentialResp.reason         max_size:64
 
+device.SnapshotCommand.upload_url  max_size:512
+device.SnapshotResponse.reason     max_size:64
+
 device.CommandResponse.device_id    max_size:32
 device.JoinRoomResp.reason          max_size:64
 device.LeaveRoomResp.reason         max_size:64
